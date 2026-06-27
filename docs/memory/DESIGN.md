@@ -15,7 +15,7 @@
 flowchart TD
     schema["schema.py<br/>(MemoryItem / 类型别名)"]
 
-    subgraph L1["Layer 1 (彼此独立, 可并行)"]
+    subgraph L1["Layer 1 (依赖 schema, 可并行)"]
         extract["extract.py"]
         router["router.py"]
         buffer["buffer.py"]
@@ -207,7 +207,7 @@ stateDiagram-v2
 | `source_msg` | 创建时 | 原始来源 message id(细化 top-level `source`) |
 | `supersedes` | 新项固化(SUPERSEDE)| 它取代了哪个 old id |
 | `superseded_by` | 旧项被取代 | 取代它的 new id(即 brief 的 `superseded_by`)|
-| `edit_ref` | 固化成功后 | `editing.edit` 返回值的稳定标识(不透明,§7),用于审计 |
+| `edit_ref` | 固化成功后 | `editing.edit` 返回的稳定标识(不透明;SPIKE 0 确认其为 `HopfieldAdapter` 子模块,memory/ 仍按不透明处理,§7),用于审计 |
 | `consolidated_at` | 固化成功后 | 固化时间(epoch 秒)|
 | `duplicate_of` | SKIP(可选审计)| 与哪个已固化项重复 |
 
@@ -215,9 +215,9 @@ stateDiagram-v2
 
 `schema.py` 标了 TODO「serialization / validation helpers」。`serving/store.py` 的 `upsert_memory / get_memories` 收发 `dict`(非 `MemoryItem`),因此需要 `MemoryItem ↔ dict` 的 (de)serialize(`dataclasses.asdict` + 反向 `from_dict` + 轻校验)。建议作为 Layer-0 的 schema helper 一并补齐。详见 §10-6。
 
-### 3.6 `Decision`(dedup 输出 —— 推荐细化)
+### 3.6 `Decision`(dedup 输出 —— 已定,随 `schema` 冻结于 Layer 0)
 
-冻结的 `classify -> DedupVerdict` 是裸枚举,**携带不了 supersede 的 old_id**。本设计主线采用方案 A:
+裸枚举 `DedupVerdict` **携带不了 supersede 的 old_id**,而 `dedup`(L1)/`consolidate`(L2)都 load-bearing、签名直接依赖它。solo 开发无「团队确认」环节 —— **此处直接定为方案 A,并随 `schema` 一同冻结**(冻结必须含这个决定,否则 dedup/consolidate 一直返工、等于没冻):
 
 ```python
 @dataclass
@@ -226,7 +226,9 @@ class Decision:
     target_id: Optional[str] = None # supersede 时 = 被取代旧项的 id; 否则 None
 ```
 
-`classify` 返回 `Decision`(`DedupVerdict` 仍作为 verdict 的枚举保留)。备选方案 B(零 schema 改动)见 §4.5 / §10-1。
+`classify` 返回 `Decision`;`consolidate` 直接用 `decision.target_id`(`DedupVerdict` 保留为 verdict 的枚举)。
+
+**否决方案 B(consolidate 自己用 NN top-1 复原 target):** footgun —— dedup 的 LLM judge 据以判 supersede 的那条 neighbor,与 consolidate 事后独立复原的 NN top-1 可能不是同一条 → 退休错对象。方案 A 让 judge 把锁定的 `target_id` 直接传出,杜绝此不一致。
 
 ---
 
@@ -325,7 +327,7 @@ class Decision:
 ### 4.5 `dedup.py`
 
 - **职责**:consolidation 时判定 `candidate` vs 已固化记忆 → `Decision`。Layer-2 **语义**去重(INV-9)。**运行于 consolidation,不在入 buffer 前(INV-2)。**
-- **接口**:冻结签名为 `classify(candidate: MemoryItem, consolidated: Sequence[MemoryItem]) -> DedupVerdict`。**本设计推荐细化返回类型为 `Decision`**(§3.6),以携带 supersede 的 `target_id`:
+- **接口**:冻结签名为 `classify(candidate: MemoryItem, consolidated: Sequence[MemoryItem]) -> DedupVerdict`。**已定细化为返回 `Decision`**(§3.6,随 `schema` 冻结于 L0),以携带 supersede 的 `target_id`:
 
   ```python
   def classify(candidate: MemoryItem,
@@ -338,9 +340,7 @@ class Decision:
   3. `sim ≥ T`:
      - **Minimal**:用相似度 + 简单规则区分 —— 极高相似且 text 近乎一致 → `duplicate`;高相似但表述/取值有别 → `supersede(target=nn.id)`。
      - **Full**:调 `llm` 缝 judge(`candidate` vs `nn.text`)分类 same / changed / new → `duplicate` / `supersede(target=nn.id)` / `new`。
-- **`Decision` 表达(核心取舍)**:
-  - **方案 A(推荐,主线)**:`classify` 返回 `Decision{verdict, target_id}`;`consolidate` 直接用 `decision.target_id`。语义最清晰。代价:轻微改动 Wave-0 契约(`DedupVerdict`→`Decision`),需团队同意(§10-1)。
-  - **方案 B(零 schema 改动,fallback)**:`classify` 仍只返回 `DedupVerdict`;`consolidate` 在 `verdict=="supersede"` 时用同一 embedding NN top-1 复原 target。要求 dedup 与 consolidate 用**同一相似度口径**(把 NN 抽到 `embed` 缝,或 dedup 暴露 `nearest(candidate, consolidated) -> Optional[MemoryItem]` helper),否则 judge 想的 target 与 consolidate 选的可能不一致。
+- **`Decision` 表达(已定 = 方案 A)**:`classify` 返回 `Decision{verdict, target_id}`,`consolidate` 直接用 `decision.target_id`。已随 `schema` 冻结于 L0;否决「consolidate 自己 NN top-1 复原」的 footgun(target 不一致)理由见 §3.6。
 - **edge cases**:`consolidated` 为空 → 一律 `new`;candidate 接近多条 → 取 top-1(多目标 supersede 暂不支持,§10-11);阈值边界;LLM judge 不可用 → 退化为纯阈值(minimal)。
 - **依赖**:`embed` 缝、`llm` 缝(full)、`schema`。
 - **Minimal**:exact / embedding-NN + 阈值。**Full**:加 fast-LLM judge。
@@ -508,15 +508,16 @@ messages = [
 
 - 读路径始终用 edited model(INV-6);RAG off 只是清空 docs 段(hero 里 buffer 段也传空),骨架不变(INV-5)。
 - **全新会话**:被测事实**不在 buffer**(固化时已 `drop`,INV-4)、docs 段空(RAG off)→ 答对**只能**源自权重。**no-double-existence 正是这个证明成立的前提** —— 否则无法排除答案来自 buffer/检索。
+- ⚠️ **当前阻塞(SPIKE 0 头号发现)**:上面的骨架走 chat template,而 SPIKE 0 发现 **chat-templated prompt + RAG off 下 HoReN edit 不触发**(检索 key 建于 raw-prompt 隐状态,chat 包裹使其偏移 → 检索分 < 0.85 → 不注入);raw-prompt 路径已通。**hero proof 只有在 chat 路径也能触发 edit 后才真正成立** —— 当前最高风险,候选解(v0.3,部分在 `memory/` 外)见 §10 顶部与 `docs/v0.2-spike0.md`。
 
 ---
 
 ## 7. `editing.edit` 缝
 
 - **接口假设(冻结)**:`edit(model: Any, memory: Any) -> Any`。`memory/` 传入(不透明 model 句柄,`MemoryItem`),拿回不透明返回。
-- **返回类型 TBD**:可能是 full `state_dict` / weight delta / side-module。`memory/` **不假设**具体形态:
-  - `consolidate` 只把返回当作不透明 `ref`,提取一个稳定标识 `ref_id(ref)`(对象则 `id()`,或调用方约定的 handle id)记入 `provenance.edit_ref` 供审计。
-  - **不**用返回做 inference、**不**解析其结构。真正的热插拔(`swap_edit_module`,它 mirror `editing.edit` 的输出格式)由 `serving/model_host` 负责 —— **不在 `memory/`**。
+- **返回类型(SPIKE 0 已确认,不再 TBD)**:= `HopfieldAdapter` 子模块(side-module)@ `layers[29].mlp.down_proj`(codebook,base 冻结),**不是** state_dict / delta。`memory/` 仍**按不透明处理**(解耦不变):
+  - `consolidate` 只把返回当作不透明 `ref`,提取稳定标识 `ref_id(ref)`(对象则 `id()`,或约定的 handle id;亦可附记 codebook_size 等元数据)写入 `provenance.edit_ref` 供审计。
+  - **不**用返回做 inference、**不**解析其结构。真正的热替换(`swap_edit_module`,对 down_proj 做 `setattr`、mirror `editing.edit` 输出)由 `serving/model_host` 负责 —— **不在 `memory/`**(SPIKE 0 已验证零拷贝单次 `setattr`)。
 - **model 句柄来源(关键解耦点)**:`run_pass(trigger)` 无 model 参数,且 `memory/` 不 import `serving/`。
   - **推荐**:`consolidate` 通过 `editing` 这**唯一缝**取「当前 model」—— 即由 `editing` 模块暴露/转发一个获取 resident model 的入口(其内部对接 `serving/model_host.current_model()`)。这样 `memory/` 只依赖 `editing` 一个缝,不直接 import `serving/`。
   - **备选**:`serving` 经模块级访问器注入(签名固定为 `run_pass(trigger)`,无法走参数)。
@@ -527,56 +528,96 @@ messages = [
 
 ## 8. 构建顺序与并行
 
-- **Layer 0 — `schema`(先冻结)**:所有人依赖。已基本实现;仅需补:§3.5 的 `MemoryItem ↔ dict` (de)serialize helper、§3.4 的 provenance 键常量、以及(若采方案 A)§3.6 的 `Decision` 类型。冻结后并行解锁。
-- **Layer 1 — 只依赖 `schema`,彼此独立,可完全并行**:`buffer`、`prompt`、`rag_store`、`extract`、`router`、`dedup`。三个内部缝 `llm`/`embed`/`store` 无业务依赖,可在本层并行落地。
-- **Layer 2 — `consolidate`(最后建)**:集成器,消费 `buffer` + `dedup` + `editing.edit` + registry。
-- **并行计划(hackathon,用 agent teams;CLAUDE.md 规则 1)**:Layer 1 六模块 + 三缝分头并行实现 + 各自单测;Layer 0 一人先定并冻结;Layer 2 待 `buffer`/`dedup` 与 `editing` 缝就绪后集成。
-- **跨层桩**:Layer 1 开发时,`editing.edit` / Mongo 用 mock / 内存;`extract` 对 `router` 用接口桩。
+> 关键区分:下面的 **Layer 0/1/2 是 `memory/` 内部的依赖序(谁 import 谁),不是 hackathon 的执行/验证序。** 执行序是 **spike-first + hero-first**(§8.2–8.5),别把依赖序当施工甘特图。
+
+### 8.1 依赖序(DAG)
+
+- **Layer 0 — `schema`(先冻结)**:所有人依赖。冻结内容**必须包含**:`MemoryItem`、类型别名、§3.5 的 `MemoryItem ↔ dict` helper、§3.4 的 provenance 键常量,**以及 §3.6 的 `Decision` 类型(已定方案 A,非 open)**。`Decision` 不进 L0,`dedup`/`consolidate` 的签名就一直吊着 → 等于没冻。
+- **Layer 1 — 只依赖 `schema`**:`buffer`、`prompt`、`rag_store`、`extract`、`router`、`dedup` + 内部缝 `llm`/`embed`/`store`。**并非彼此完全无边**:`extract` 同层依赖 `router`(§4.1)。但 `router` 接口已冻,`extract` 对桩 `router` 即可并行,无需等其实现。
+- **Layer 2 — `consolidate`(依赖序上最后)**:集成器,消费 `buffer` + `dedup` + `editing.edit` + registry。
 
 | 模块 | 依赖 | 层 |
 |---|---|---|
-| `schema` | — | 0 |
+| `schema`(含 `Decision`) | — | 0 |
 | `llm` / `embed` / `store` 缝 | — | 1 |
 | `prompt` | schema | 1 |
 | `buffer` | schema, store | 1 |
 | `rag_store` | schema, embed, store | 1 |
 | `router` | schema, llm | 1 |
-| `extract` | schema, router, llm | 1 |
-| `dedup` | schema, embed, llm | 1 |
+| `extract` | schema, **router(同层·桩并行)**, llm | 1 |
+| `dedup` | schema, embed, llm, **Decision** | 1 |
 | `consolidate` | schema, buffer, dedup, store, **editing(外部)** | 2 |
+
+### 8.2 依赖序 ≠ 执行序(别被横切误导)
+
+§8.1 只回答「import/编译能不能过」。若照它**横切**(铺完整个 L1 再做 L2),会把**最高风险的端到端集成**(`consolidate ↔ editing.edit ↔ 真模型 ↔ generate`)埋到最后才验证 —— 对 hackathon 是反的:最该最先知道的「editing 在真模型上端到端成不成」,恰是横切最后才碰的。
+
+### 8.3 执行序:spike-first 竖切,与 `memory/` 并行
+
+- **SPIKE 0(竖切,最高优先,已 PASS ✅)**:在 `memory/` 之外(`editing.py` + `serving/model_host.py` + `generate.py` + driver)硬编一条 `edit → 热替换 → RAG off 答对`,**最先验证机制**。见 `docs/v0.2-spike0.md`。
+- **`memory/` 与 spike 并行**:`memory/` 各模块对着 **mock 的 `editing.edit`** 单测,**不依赖 spike**。但务必记住:**`consolidate` 单测全绿 ≠ hero loop 成立** —— 端到端只有 spike(真 editing→swap→答对)绿了才算数。别被「L2 最后集成」的横切叙事带偏。
+- **复用 spike 副产物**:`editing.edit` 产出格式**已确认 = `HopfieldAdapter` 子模块**(非 TBD,§7);`prompt.build_prompt` **已由 SPIKE 0 落地**(契约见 §6)。
+
+### 8.4 hero-criticality 叠加(六模块非等权)
+
+hero 主轴 = `extract + router + buffer + prompt + consolidate`(**全 minimal**)。不在关键路径的别等量投入:
+
+| 模块 | hero 关键? | 投入 |
+|---|---|---|
+| `consolidate` | ★ 核心(集成 + 写权重)| 重 |
+| `extract` | ★ 主轴(语义抽取)| 重 |
+| `router` | ★ 主轴(shape 判定)| 中 |
+| `prompt` | ★ 主轴(spike 已落地)| 轻(收尾/校验)|
+| `buffer` | ★ 主轴(按 status 的 dict)| 轻 |
+| `rag_store` | ✗ hero RAG off → `search` 可暂返 `[]` | thin / 延后 |
+| `dedup` | ✗ 几条 distinct fact → 近乎 no-op | minimal(纯阈值;LLM judge 延后)|
+
+### 8.5 你的手 vs 丢给 agent
+
+- **你的手(判断 + 语义 load-bearing)**:`extract`、`router`、`consolidate`。
+- **丢给 agent(机械、契约清晰)**:`buffer`、`prompt`(收尾)、`rag_store`-thin、`dedup`-minimal、内部缝 `llm`/`embed`/`store`(内存版)。
 
 ---
 
 ## 9. 测试策略
 
-model-independent 单测(pytest;repo 目前无测试基建,需引入 `pytest` + `tests/` + `conftest`)。**四个 mock 点**:`llm` 缝、`embed` 缝、`editing.edit`、`store` 缝(内存版常可直接当真实现用)。**全程无需 GPU / 真实模型 / 真实 LLM / 真实 Mongo。**
+> 排序原则:**hero loop 是唯一被评判的东西,不是 test 套件。** 投入按「对 hero 的价值」排,不按模块数铺平。
 
-按模块关键行为:
+### 9.1 唯一必过 —— e2e hero smoke(真,非 mock)
 
-- **schema**:`MemoryItem ↔ dict` round-trip;provenance 键存取。
-- **router**(routing 决策,表驱动):atomic 偏好→`edit`;长文档→`rag`;transient→`rag`;belief→`edit`。需 LLM 的用例 mock `llm.complete` 返回固定结果。覆盖三条件真值组合。
-- **extract**:mock `llm` 返回固定 JSON → 期望 N 条 `MemoryItem`、`route` 已回填、`status=="buffer"`、**未持久化**(不触 buffer/rag_store);非法 JSON → `[]`。
-- **buffer**:`append → load_unconsolidated → drop` 增删查;`drop` 不存在 id;计数。
-- **rag_store**:mock `embed`(构造确定向量)→ `add` 后 `search` 的 top-k 顺序可预测;空库;`k` 越界。
-- **dedup**:mock `embed`(构造距离)+ mock `llm` judge → 三种 verdict;阈值边界;空 `consolidated`→`new`;supersede 带正确 `target_id`(方案 A)。
-- **prompt**(纯函数):断言 `messages` 结构 —— `SYSTEM` 在;RAG 窗口两段**恒在**(空时占位);buffer 段措辞 vs docs 段措辞;`query` 在末;RAG-off(空 `rag_hits`)仍渲染 docs 段占位。
-- **consolidate**(集成;mock `editing.edit`/`dedup`/`buffer`/registry):
-  - **draining**:跑后 buffer 空(所有项被处理,含 SKIP)。
-  - **dispatch**:NEW(`editing.edit` 调 1 次、registry 增、`n_written==1`);SUPERSEDE(old → `retired`、`superseded_by` 设、新项 `supersedes` 设、计数);SKIP(`editing.edit` 未调、`buffer.drop` 调、`n_written` 不增)。
-  - **provenance**:`edit_ref`/`supersedes`/`superseded_by` 落点正确。
-  - **失败**:`editing.edit` 抛错 → 该项留 buffer、`n_written` 不计、old 未 retire。
-  - **同趟可见性**:同趟两近似项 → 第二条 dedup 到第一条。
-  - **返回值**:`n_written` 正确。
+一条端到端冒烟,RunPod 真模型上跑通:**真 `extract` → 真 `consolidate` → 真 `editing.edit`(真模型 edit + 热替换)→ `generate` 在 RAG off 下答对**。这≈ SPIKE 0 的 driver(`docs/v0.2-spike0.md`),当 **「唯一必过」**。
+
+**单测全绿 ≠ hero 成立**:mock 掉 `editing.edit` 的单测证明不了「知识真进了权重」。只来得及写一个测试,就写这条 e2e smoke,不是七模块 unit。
+
+⚠️ **已知阻塞(SPIKE 0 头号发现)**:当前 **chat 推理路径(`prompt.build_prompt` + chat template,RAG off)edit 不触发**(检索 key 建于 raw-prompt 隐状态,chat 模板偏移 → 检索分 < 0.85);raw-prompt 路径已通。**这条 smoke 在 chat 路径变绿 = hero loop 真正成立的判据**(v0.3 待办,见 §6 / §10 顶部)。
+
+### 9.2 model-independent 单测(按价值分层,不铺平)
+
+四个 mock 点(`llm`/`embed`/`editing.edit`/`store`)使单测脱 GPU / 真模型 / 真 LLM / 真 Mongo。但**只为高价值模块搭最小 pytest 套,别为全模块铺 conftest**。
+
+- **高价值(写)**
+  - `consolidate`:dispatch(NEW/SUPERSEDE/SKIP 三路)、draining(跑后 buffer 空,含 SKIP)、provenance(`edit_ref`/`supersedes`/`superseded_by` 落点)、失败留 buffer(`editing.edit` 抛错 → 不 drop / 不计 / old 未 retire)、同趟可见性、`n_written` 返回值。**最难 debug,边写边配测。**
+  - `prompt`:结构 invariant —— SYSTEM 在;RAG 窗口两段**恒在**(空时占位);buffer 段 vs docs 段措辞;query 在末;RAG-off 仍渲染 docs 占位。**纯函数、极便宜;malformed prompt 全盘崩,必测。**
+- **中价值(轻测 / 可只手动)**:`router` 真值表、`extract` 的 mock-LLM 抽取 —— 两者半靠 LLM、demo 你控输入,没那么关键;e2e smoke 已覆盖主路径。
+- **低价值(砍 / 只手动冒烟)**:`buffer` CRUD(就是个 dict,在测琐碎代码)、`rag_store` top-k(hero RAG off;精力投到 deferred path)。
+
+### 9.3 时序
+
+- load-bearing 的 `consolidate` **边写边配测**(最易错,值得 TDD)。
+- 琐碎模块(`buffer`/`rag_store`)**别在时间压力下 TDD** —— 跳过或只手动冒烟。
+- 测试基建本身耗时:**只为 `consolidate` + `prompt` 搭最小套**。
 
 ---
 
 ## 10. 开放问题 / 风险
 
-> 不静默发明 —— 以下需团队/产品定夺。
+> 不静默发明。部分项已被 SPIKE 0 解决(标 ✅);最高风险单列于顶部。
 
-1. **dedup `Decision` 的 target 表达**:冻结 `classify -> DedupVerdict` 裸枚举携带不了 supersede 的 `old_id`。方案 A(改返回 `Decision{verdict,target_id}`,动 Wave-0 契约)vs 方案 B(consolidate 用 NN top-1 复原)。**本设计主线方案 A**,需团队确认是否接受改签名。
+**★ 最高风险(hero blocker)— chat 模板下 edit 不触发**:SPIKE 0 发现 `prompt.build_prompt` 产出的 chat-templated prompt 在 RAG off 下**不触发 HoReN edit**(检索 key 建于 raw-prompt 隐状态,chat 包裹偏移 → 检索分 < 0.85);raw-prompt 路径已通。这是 hero loop 当前真正的卡点。候选解(v0.3,部分在 `memory/` 外):edit 时用 chat 模板化 prompt 建 key / 推理时给检索单独喂 raw query / 调阈值或 query-selection 策略。见 `docs/v0.2-spike0.md` 的「头号发现」。
+
+1. **dedup `Decision` 的 target 表达** — ✅ **已定**:方案 A(`Decision{verdict,target_id}`),随 `schema` 冻结于 L0(§3.6)。否决方案 B 的理由:judge 选定的 target 与 consolidate 事后 NN top-1 复原可能不一致(退休错对象)。
 2. **`consolidate` 的 model 句柄注入点**:`run_pass(trigger)` 无 model 参数;从 editing/serving 取的精确机制未定(`editing` 暴露 current model? `serving` 模块级注入?)。需与 `serving/model_host` 约定(§7)。
-3. **`editing.edit` 返回类型 TBD**:`state_dict` / delta / side-module 未定;影响 `provenance.edit_ref` 的稳定标识取法,以及 `model_host` 热插拔(后者在 `memory/` 外)。
+3. **`editing.edit` 返回类型** — ✅ **已确认(SPIKE 0)**:= `HopfieldAdapter` 子模块 @ `layers[29].mlp.down_proj`(非 state_dict/delta);单条 edit ≈ 4.54 s。`memory/` 仍按不透明 `edit_ref` 处理;热替换(`setattr`)由 `model_host` 负责。
 4. **`prompt` 的 `history` 未线程化**:冻结 `build_prompt(query, buffer, rag_hits)` 无 `history`/`system` 参数。hero(全新会话)不需要;多轮需扩签名(加 `history`)或由 `generate` 在外部拼 history。需产品决定是否要多轮。
 5. **buffer ↔ consolidated registry 持久化边界**:consolidated registry(dedup 比对源 + UI 列表)无独立模块;hero 用内存,full 走 Mongo `memories` collection 按 `status` 切片。其归属(`memory/` 内部 `store` 缝 vs `serving/store.py`)与 `buffer.drop` 是「删除」还是「status 转移」需定齐(本设计:转移 = 写 consolidated + drop buffer)。
 6. **`MemoryItem ↔ Mongo doc` 序列化**:`schema.py` 已标 TODO;`upsert_memory`/`get_memories` 收发 `dict`,需 `asdict`/`from_dict` helper + 轻校验(§3.5)。
