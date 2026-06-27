@@ -121,3 +121,110 @@ def test_history_spliced_between_system_and_final_user_in_order():
     assert msgs[2] == history[1]
     assert msgs[-1] == {"role": "user", "content": q}
     assert len(msgs) == 1 + len(history) + 1
+
+
+# ---------------------------------------------------------------------------
+# v0.4.1 FULL tier: optional token_budget / count_tokens (appended tests).
+# All pure-function, CPU-only — no GPU / model / network.
+# ---------------------------------------------------------------------------
+
+
+def test_token_budget_none_is_byte_identical_to_no_arg_call():
+    """token_budget=None (and even with a count_tokens passed) == the hero/no-arg path."""
+    q = "what is my favorite drink?"
+    buf = [
+        _item("b1", "drinks espresso after lunch", route="edit"),
+        _item("b2", "prefers dark mode", route="edit"),
+    ]
+    hits = [
+        _item("r1", "the mitochondria is the powerhouse"),
+        _item("r2", "the wifi password rotates monthly"),
+    ]
+    history = [
+        {"role": "user", "content": "earlier-q"},
+        {"role": "assistant", "content": "earlier-a"},
+    ]
+    baseline = build_prompt(q, buf, hits, history=history)
+    explicit_none = build_prompt(q, buf, hits, history=history, token_budget=None)
+    # Full list equality == byte-identical strings (dicts compare value-wise).
+    assert explicit_none == baseline
+    # count_tokens MUST be ignored entirely when the budget is None.
+    with_counter = build_prompt(
+        q, buf, hits, history=history, token_budget=None, count_tokens=len
+    )
+    assert with_counter == baseline
+    # And explicitly: concatenated content is identical (no silent reshaping).
+    assert "".join(m["content"] for m in explicit_none) == "".join(
+        m["content"] for m in baseline
+    )
+
+
+def test_tiny_budget_sheds_docs_before_buffer_with_omission_marker():
+    """A tight budget keeps SYSTEM+query+both headers, drops docs first, marks omissions."""
+    q = "tiny"
+    buf = [_item("b1", "x", route="edit")]
+    docs = [
+        _item("r1", "this is a long reference document about cells"),
+        _item("r2", "another long reference document about wifi"),
+        _item("r3", "third long reference document about coffee"),
+    ]
+
+    def approx(s: str) -> int:  # mirrors prompt._count default (len // 4)
+        return len(s) // 4
+
+    mandatory = approx(SYSTEM) + approx(q) + approx(USER_HEADER) + approx(DOCS_HEADER) + 6
+    # +3 leaves room for the single tiny buffer item ("1. x" -> cost 2), none for docs.
+    budget = mandatory + 3
+    msgs = build_prompt(q, buf, docs, token_budget=budget)
+    content = _system_content(msgs)
+
+    # Mandatory parts always survive the trim.
+    assert SYSTEM in content
+    assert USER_HEADER in content
+    assert DOCS_HEADER in content
+    assert msgs[-1] == {"role": "user", "content": q}
+
+    buf_seg, docs_seg = _segments(content)
+    # Buffer item is kept; docs are shed FIRST (lowest priority).
+    assert "1. x" in buf_seg
+    assert "3 more omitted" in docs_seg
+    assert "reference document" not in docs_seg
+    # Only the docs segment was trimmed (buffer had nothing to omit).
+    assert content.count("more omitted") == 1
+
+
+def test_count_tokens_injection_drives_trimming():
+    """An injected count_tokens is actually invoked and governs what gets trimmed."""
+    q = "q"
+    buf = [_item("b1", "buffer fact", route="edit")]
+    docs = [_item("r1", "doc fact")]
+
+    calls: list[str] = []
+
+    def counter(s: str) -> int:
+        calls.append(s)
+        return 1000  # every string is "expensive"
+
+    # mandatory = SYSTEM + query + both headers (4 * 1000) + 6 slack = 4006 -> remaining 0.
+    budget = 4006
+    msgs = build_prompt(q, buf, docs, token_budget=budget, count_tokens=counter)
+
+    assert calls, "injected count_tokens must actually be invoked"
+    content = _system_content(msgs)
+    assert SYSTEM in content
+    assert USER_HEADER in content and DOCS_HEADER in content
+    assert msgs[-1] == {"role": "user", "content": q}
+
+    buf_seg, docs_seg = _segments(content)
+    # The inflated counter pushes EVERYTHING out -> both segments show a marker.
+    assert "1 more omitted" in buf_seg
+    assert "1 more omitted" in docs_seg
+    assert "buffer fact" not in content
+    assert "doc fact" not in content
+
+    # Contrast: the SAME budget under the default (len // 4) counter omits nothing,
+    # proving the injected counter — not the budget alone — drove the trimming.
+    default_content = _system_content(build_prompt(q, buf, docs, token_budget=budget))
+    assert "more omitted" not in default_content
+    assert "1. buffer fact" in default_content
+    assert "1. doc fact" in default_content

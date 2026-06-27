@@ -279,3 +279,114 @@ def test_no_provider_raises_runtime_error(monkeypatch, editing_ok):
 
     # Nothing was consolidated or drained.
     assert [r.id for r in buffer.load_unconsolidated()] == ["n1"]
+
+
+# --------------------------------------------------------------------------- #
+# 8. retry policy (v0.4.1 FULL tier: EDIT_RETRIES=2)
+# --------------------------------------------------------------------------- #
+def _make_flaky_editing(*, fail_times: int) -> types.ModuleType:
+    """Fake ``editing`` whose ``edit`` raises ``fail_times`` then succeeds.
+
+    Records every attempt in ``.calls`` so the retry count is observable.
+    """
+    fake = types.ModuleType("editing")
+    calls: list[dict] = []
+
+    def edit(model, req, **kw):  # noqa: ANN001
+        calls.append({"model": model, "req": req, "kw": kw})
+        if len(calls) <= fail_times:
+            raise RuntimeError(f"boom: editing.edit transient failure #{len(calls)}")
+        return {"adapter": object(), "codebook_size": 1}
+
+    fake.edit = edit  # type: ignore[attr-defined]
+    fake.calls = calls  # type: ignore[attr-defined]
+    return fake
+
+
+def test_retry_then_succeed_consolidates(monkeypatch):
+    """Two transient failures then success: item consolidated, n_written=1, 3 attempts."""
+    # Avoid real backoff sleeps so the test stays fast.
+    monkeypatch.setattr(consolidate.time, "sleep", lambda _s: None)
+    flaky = _make_flaky_editing(fail_times=consolidate.EDIT_RETRIES)  # fail twice, succeed 3rd
+    monkeypatch.setitem(sys.modules, "editing", flaky)
+
+    item = make_edit_item("r1")
+    buffer.append(item)
+    _set_classify(monkeypatch, lambda cand, consolidated: Decision("new"))
+
+    n = consolidate.run_pass("manual")
+
+    assert n == 1
+    # Exactly EDIT_RETRIES + 1 attempts (2 failures + 1 success).
+    assert len(flaky.calls) == consolidate.EDIT_RETRIES + 1 == 3
+    stored = store.get("r1")
+    assert stored is not None
+    assert stored.status == "consolidated"
+    assert PROV_EDIT_REF in stored.provenance
+    assert PROV_CONSOLIDATED_AT in stored.provenance
+    assert buffer.load_unconsolidated() == []
+
+
+def test_retry_exhausted_leaves_item_in_buffer(monkeypatch):
+    """Edit raises on every attempt: item stays buffered, n_written=0, all attempts used."""
+    monkeypatch.setattr(consolidate.time, "sleep", lambda _s: None)
+    # Fail more times than we will ever attempt -> always raises.
+    always = _make_flaky_editing(fail_times=consolidate.EDIT_RETRIES + 5)
+    monkeypatch.setitem(sys.modules, "editing", always)
+
+    item = make_edit_item("r2")
+    buffer.append(item)
+    _set_classify(monkeypatch, lambda cand, consolidated: Decision("new"))
+
+    n = consolidate.run_pass("manual")
+
+    assert n == 0
+    # All EDIT_RETRIES + 1 attempts were spent before giving up.
+    assert len(always.calls) == consolidate.EDIT_RETRIES + 1 == 3
+    remaining = buffer.load_unconsolidated()
+    assert [r.id for r in remaining] == ["r2"]
+    stored = store.get("r2")
+    assert stored.status == "buffer"
+    # No success-only provenance was stamped.
+    assert PROV_EDIT_REF not in (stored.provenance or {})
+    assert PROV_CONSOLIDATED_AT not in (stored.provenance or {})
+
+
+# --------------------------------------------------------------------------- #
+# 9. multi-target supersede (v0.4.1 FULL tier: Decision.target_ids)
+# --------------------------------------------------------------------------- #
+def test_multi_target_supersede_retires_all(monkeypatch, editing_ok):
+    """A candidate supersedes TWO old memories at once: both retired + linked, n_written=1."""
+    old_a = make_edit_item("oa", target="Lyon", status="consolidated")
+    old_b = make_edit_item("ob", target="Nice", status="consolidated")
+    store.upsert(old_a)
+    store.upsert(old_b)
+
+    new = make_edit_item("nm", target="Paris")
+    buffer.append(new)
+
+    # Primary target_id == first element; target_ids holds ALL superseded ids.
+    _set_classify(
+        monkeypatch,
+        lambda cand, consolidated: Decision("supersede", "oa", target_ids=["oa", "ob"]),
+    )
+
+    n = consolidate.run_pass("manual")
+
+    assert n == 1
+    # Both old memories retired and back-linked to the new item.
+    for old_id in ("oa", "ob"):
+        stored_old = store.get(old_id)
+        assert stored_old.status == "retired"
+        assert stored_old.provenance[PROV_SUPERSEDED_BY] == "nm"
+
+    # New item consolidated and forward-links to BOTH retired ids (as a list).
+    stored_new = store.get("nm")
+    assert stored_new.status == "consolidated"
+    assert stored_new.provenance[PROV_SUPERSEDES] == ["oa", "ob"]
+    assert PROV_EDIT_REF in stored_new.provenance
+    assert PROV_CONSOLIDATED_AT in stored_new.provenance
+
+    assert buffer.load_unconsolidated() == []
+    # A single edit call writes the new memory regardless of how many it retires.
+    assert len(editing_ok.calls) == 1
