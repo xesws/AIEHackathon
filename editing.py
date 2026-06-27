@@ -22,11 +22,20 @@ import serving.model_host as model_host
 def edit(model: Any, memory: Any, *, key_mode: str = "chat") -> dict:
     """Apply ONE HoReN edit onto the resident ``model``; return the installed adapter + timing.
 
-    ``memory``: for SPIKE 0, a request dict ``{"prompt": ..., "target_new": ...}`` (extra keys
-    like ``subject`` are ignored by HoReN's tokenizer). The ``MemoryItem.text -> (prompt,
-    subject, target_new)`` decomposition is deferred to v0.3.
+    ``memory``: an ALREADY-SPLIT request dict ``{"prompt": ..., "target_new": ...}`` (extra keys
+    like ``subject`` are ignored by HoReN's tokenizer).
 
-    ``key_mode`` (v0.3 Plan B):
+    Two easily-conflated things live near here; only one is unbuilt — do not confuse them:
+      - TEXT DECOMPOSITION (``MemoryItem.text -> prompt/subject/target_new``): parsing a free-form
+        fact string into edit fields. NOT IMPLEMENTED — callers must pass a pre-split dict. There
+        is NO ``split`` function anywhere; this step simply does not exist yet.
+      - QUERY-SPAN ISOLATION (the "chat key" / ``key_mode='chat'`` below): the v0.3 Plan-B fix that
+        keys on only the user-question token span (excluding the chat scaffold). This IS DONE —
+        in ``keying.py`` (``compute_key`` / ``query_span_in_rendered``) + the adapter's
+        ``_pool_span`` / ``query_span`` (``third_party/horen/.../editor.py``). It is unrelated to
+        the text decomposition above.
+
+    ``key_mode`` (v0.3 Plan B — the QUERY-SPAN ISOLATION, not text decomposition):
       - ``"chat"`` (default, the fix): after the edit, APPEND a query-span-isolated chat key
         (the hero chat render of the stem) that reuses the same trained value, so the codebook
         serves BOTH the raw path (HoReN's native key) and the chat path (the appended key).
