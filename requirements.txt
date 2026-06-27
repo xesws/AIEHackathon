@@ -1,0 +1,14 @@
+# Engram — Python dependencies.
+#
+# NOTE: torch is intentionally UNPINNED. This environment already has
+# torch 2.8.0+cu128 (CUDA) installed — do NOT reinstall or downgrade it.
+torch
+transformers
+fastapi
+uvicorn
+pymongo
+sentence-transformers
+
+# HoReN editing backend — vendored in third_party/horen (see scaffold step 3).
+# Install editable once vendored / layout confirmed:
+# -e ./third_party/horen

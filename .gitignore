@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.so
+.venv/
+venv/
+.env
+
+# Model weights (never commit, anywhere in the tree)
+*.safetensors
+*.pt
+*.bin
+*.gguf
+
+# Caches & data dumps (repo-root only — keep vendored third_party content intact)
+/hugging_cache/
+/.cache/
+/data/
+/dumps/
+
+# Local-only working files (not part of the project)
+prompt.md
+/README
