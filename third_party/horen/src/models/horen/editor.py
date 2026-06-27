@@ -153,6 +153,9 @@ class HopfieldAdapter(torch.nn.Module):
 
         self.key_id = -1
         self.training = False
+        # Plan B (v0.3): when set to (start, end), forward keys over ONLY those query-span
+        # rows of the layer input (scaffold-isolated), instead of the legacy _select_query.
+        self.query_span = None
         if transpose:
             self.key_shape = layer.weight.shape[1]
             self.value_shape = layer.weight.shape[0]
@@ -215,6 +218,16 @@ class HopfieldAdapter(torch.nn.Module):
             return layer_input[:, prompt_token_len - k : prompt_token_len, :].mean(dim=1)
 
         raise ValueError(f"Invalid query_selection_strategy={strategy}")
+
+    def _pool_span(self, layer_input: torch.Tensor, start: int, end: int):
+        """Plan B: mean-pool the layer-input rows over the query span [start, end] (inclusive).
+
+        Shared by forward (read-key) and keying.compute_key (write-key) so the extraction
+        never diverges between write and read. Returns [B, D].
+        """
+        end = min(int(end), layer_input.shape[1] - 1)
+        start = max(0, min(int(start), end))
+        return layer_input[:, start : end + 1, :].mean(dim=1)
 
     def _query(self, q: torch.Tensor):
         if q.ndim != 2:
@@ -292,8 +305,12 @@ class HopfieldAdapter(torch.nn.Module):
         if not self.training and len(self.keys) == 1:
             return layer_out
 
-        last_prompt_token_index = min(self.key_id, args[0].shape[1] - 1)
-        query = self._select_query(args[0], last_prompt_token_index)
+        last_prompt_token_index = min(self.key_id, args[0].shape[1] - 1)  # injection pos — UNCHANGED
+        span = getattr(self, "query_span", None)
+        if span is not None:
+            query = self._pool_span(args[0], span[0], span[1])            # Plan B: query-span rows
+        else:
+            query = self._select_query(args[0], last_prompt_token_index)  # legacy (raw path)
         if self.normalize_codebook_keys:
             query = F.normalize(query, p=2, dim=-1)
 
