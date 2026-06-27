@@ -112,6 +112,7 @@ flowchart TD
 - **INV-8 route 决定归宿且不可逆切换。** `route=="rag"` 的 item 永久存于 RAG、**永不** consolidate、永不被 supersede;`route=="edit"` 的 item 经 `buffer → weights`。
 - **INV-9 两层「太近」只管第二层。** 见 §2.1。
 - **INV-10 冲突解决按 recency。** buffer/context(最近)覆盖 weights 旧值;固化后 weights 更新且该 buffer 项被 drop(回到 INV-4)。
+- **INV-11 `memory/` 不依赖 `serving/`。** 依赖方向恒为 `serving → memory`,绝不反向;`memory/` 不 import `serving/`(包括取 model 句柄 —— 经 `editing` 缝或由 serving 注入,见 §7)。
 
 ### 2.1 两层「太近」(only Layer-2 是 `memory/` 的职责)
 
@@ -518,10 +519,9 @@ messages = [
 - **返回类型(SPIKE 0 已确认,不再 TBD)**:= `HopfieldAdapter` 子模块(side-module)@ `layers[29].mlp.down_proj`(codebook,base 冻结),**不是** state_dict / delta。`memory/` 仍**按不透明处理**(解耦不变):
   - `consolidate` 只把返回当作不透明 `ref`,提取稳定标识 `ref_id(ref)`(对象则 `id()`,或约定的 handle id;亦可附记 codebook_size 等元数据)写入 `provenance.edit_ref` 供审计。
   - **不**用返回做 inference、**不**解析其结构。真正的热替换(`swap_edit_module`,对 down_proj 做 `setattr`、mirror `editing.edit` 输出)由 `serving/model_host` 负责 —— **不在 `memory/`**(SPIKE 0 已验证零拷贝单次 `setattr`)。
-- **model 句柄来源(关键解耦点)**:`run_pass(trigger)` 无 model 参数,且 `memory/` 不 import `serving/`。
-  - **推荐**:`consolidate` 通过 `editing` 这**唯一缝**取「当前 model」—— 即由 `editing` 模块暴露/转发一个获取 resident model 的入口(其内部对接 `serving/model_host.current_model()`)。这样 `memory/` 只依赖 `editing` 一个缝,不直接 import `serving/`。
-  - **备选**:`serving` 经模块级访问器注入(签名固定为 `run_pass(trigger)`,无法走参数)。
-  - 无论哪种,`memory/` 视 model 为不透明、只透传、不 inference(INV-7)。精确注入点 §10-2。
+- **model 句柄来源(已定)**:`run_pass(trigger)` 无 model 参数。**`memory/` 绝不 import `serving/`(用户确认的硬约束,INV-11)。** 故 `consolidate` 经 **`editing` 这唯一缝**取「当前 model」—— `editing` 暴露/转发 resident-model 入口(如 `editing.current_model()`,内部对接 `serving/model_host.current_model()`);`consolidate` 调它拿到不透明句柄,再传给 `editing.edit`。
+  - 备选等价实现(若该入口会引入 `editing ↔ serving` 环):serving 启动时把 `model_host.current_model` 注入 `consolidate`(serving→memory 单向)。两者都让 `memory/` 不碰 `serving/`。
+  - `memory/` 视 model 为不透明、只透传、不 inference(INV-7)。
 - **解耦保证**:`editing.edit` 是 `memory/` 与权重编辑之间的**唯一**缝;HoReN 细节、返回形态、热插拔均在 `memory/` 之外。`memory/` 可在 `editing.edit` 被 mock 的前提下完整单测(§9)。Layer-1 codebook 去重在 editing library 内(INV-9),`memory/` 不管。
 
 ---
@@ -616,7 +616,7 @@ hero 主轴 = `extract + router + buffer + prompt + consolidate`(**全 minimal**
 **★ 最高风险(hero blocker)— chat 模板下 edit 不触发**:SPIKE 0 发现 `prompt.build_prompt` 产出的 chat-templated prompt 在 RAG off 下**不触发 HoReN edit**(检索 key 建于 raw-prompt 隐状态,chat 包裹偏移 → 检索分 < 0.85);raw-prompt 路径已通。这是 hero loop 当前真正的卡点。候选解(v0.3,部分在 `memory/` 外):edit 时用 chat 模板化 prompt 建 key / 推理时给检索单独喂 raw query / 调阈值或 query-selection 策略。见 `docs/v0.2-spike0.md` 的「头号发现」。
 
 1. **dedup `Decision` 的 target 表达** — ✅ **已定**:方案 A(`Decision{verdict,target_id}`),随 `schema` 冻结于 L0(§3.6)。否决方案 B 的理由:judge 选定的 target 与 consolidate 事后 NN top-1 复原可能不一致(退休错对象)。
-2. **`consolidate` 的 model 句柄注入点**:`run_pass(trigger)` 无 model 参数;从 editing/serving 取的精确机制未定(`editing` 暴露 current model? `serving` 模块级注入?)。需与 `serving/model_host` 约定(§7)。
+2. **`consolidate` 的 model 句柄** — ✅ **已定原则**:`memory/` **绝不 import `serving/`**(INV-11)。`consolidate` 经 `editing` 缝取 resident model(`editing.current_model()` 转发 `model_host.current_model()`);仅余实现细节(经 editing 转发 vs serving 注入 provider),两者均无 serving 依赖(§7)。
 3. **`editing.edit` 返回类型** — ✅ **已确认(SPIKE 0)**:= `HopfieldAdapter` 子模块 @ `layers[29].mlp.down_proj`(非 state_dict/delta);单条 edit ≈ 4.54 s。`memory/` 仍按不透明 `edit_ref` 处理;热替换(`setattr`)由 `model_host` 负责。
 4. **`prompt` 的 `history` 未线程化**:冻结 `build_prompt(query, buffer, rag_hits)` 无 `history`/`system` 参数。hero(全新会话)不需要;多轮需扩签名(加 `history`)或由 `generate` 在外部拼 history。需产品决定是否要多轮。
 5. **buffer ↔ consolidated registry 持久化边界**:consolidated registry(dedup 比对源 + UI 列表)无独立模块;hero 用内存,full 走 Mongo `memories` collection 按 `status` 切片。其归属(`memory/` 内部 `store` 缝 vs `serving/store.py`)与 `buffer.drop` 是「删除」还是「status 转移」需定齐(本设计:转移 = 写 consolidated + drop buffer)。
