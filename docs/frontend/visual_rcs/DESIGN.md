@@ -1,10 +1,14 @@
 Engram 前端设计综述(../visual_rcs/UI_design_visual_plan.jsx)
 ================================================================
 
-0. 定位
+0. 定位 — 纯前端交互原型(后端象征性留白)
    product-first 三个面 + 一个开发者 reveal。两速记忆模型(weights / RAG / buffer)
-   在产品面被人话化,机制留给 under-the-hood。所有组件都是"壳子 + mock 状态",
-   接口位置已对齐后端,接真实后端时组件结构不动。
+   在产品面被人话化,机制留给 under-the-hood。
+   范围(要紧):这是一个**只跑前端交互逻辑**的原型 —— 全程 in-memory mock 状态,
+   0 网络请求、0 真实后端依赖;所有"记忆动作"都是 state 内部搬运的演示(见 §3)。
+   后端只做**象征性留白**:§4 列的接入点是"将来若接真实后端、挂在哪"的示意,
+   现阶段对应的 module/api 绝大多数尚未实现,不应被读成已存在的契约。
+   做实的是交互与叙事,做虚的是后端 —— 这是有意为之的 demo 取舍。
 
 1. 组件清单(单文件,8 个组件 + 2 个内联块)
    ----------------------------------------------------------------
@@ -61,38 +65,35 @@ Engram 前端设计综述(../visual_rcs/UI_design_visual_plan.jsx)
      · 数据单向下行;事件回调上行(burnOne / demoteOne / discardOne / editPending / burnAll …)。
      · curation 三动作在 state 层就是三层之间的搬运:
          写入  = buffer → weights        留作参考 = buffer → refs        丢弃 = 出 buffer
+     · 以上全部发生在浏览器内存里 —— 没有任何请求落到后端,这就是 demo 的真实行为边界。
 
-4. 嫁接到现有后端(seam contract)★ 重点
-   左边 = 前端的 state/动作;右边 = DESIGN.md / SPIKE 0 里真实的模块/函数。
-   接后端时只换右边,组件壳子不动。标 ★ = 需要后端新写的。
+4. 后端留白(placeholder seams · 非现状,多数未实现)
+   这节不是契约,是"留白":标出将来若接真实后端,各前端动作大概挂在哪。
+   现状:前端 0 依赖后端 —— 下列动作在原型里全部是 §3 的 mock state 搬运。
+   图例   ✅ 后端已有可接   ◐ 仅前端/部分(后端缺元数据或仅 stub)   ⬜ 后端未写 · 纯留白
 
    —— 读路径 ————————————————————————————————————————————————
-   messages + 生成        ←  serving /chat → prompt.build_prompt + generate(跑在 edited model;
-                             注:serving/app.py 端点今为 stub,e2e 暂经 generate.generate 直连)
-   recalled badge         ←  generate 命中的 core memory(weights)  ★
-                             (generate.generate 现仅返回解码字符串、无命中/溯源元数据,需与 anchorTokens 同一套 per-generate instrument)
-   retrieved badge        ←  rag_store.search 命中的 doc
-   anchorTokens {t,hit,sim,mem}
-                          ←  HOREN.generate instrument 出的逐 token (hit, sim, key_label) 流  ★
-                             (key_id 现钉死在末位 prompt token、非 per-step → 逐 token 归因需另加
-                              per-decode 的 is_match/max_score/chosen_key instrument)
+   ◐ messages + 生成     serving /chat 端点今为 stub;generate / build_prompt 已有,e2e 暂经 generate.generate 直连
+   ⬜ recalled badge      想标"命中了哪条 weights",但 generate 只回字符串、无命中元数据 → 需另加 instrument
+   ◐ retrieved badge     rag_store.search 已有(可取 hits);但"答案到底用了哪条"未与消息绑定
+   ⬜ anchorTokens 归因   signature 现靠 mock anchorTokens;真逐 token (hit,sim,key_label) 流未实现
+                          (key_id 现钉死末位 prompt token、非 per-step,需另加 per-decode instrument)
 
-   —— 写路径 / 你那个 curation ————————————————————————————————
-   Pending(buffer)        ←  buffer.load_unconsolidated();propose 时跑 dedup.classify
-                             给每条标 new / supersede(target)(UI status 显示为 updates)→ 喂 UI 的 status 字段
-   [写入] / [全部写入]      →  consolidate.run_pass(trigger)->int(今为整桶提交、无审批)   ★ 需把 run_pass 拆 propose/commit
-   [留作参考]              →  route override edit→rag → rag_store.add(合 INV-8)
-   [丢弃]                  →  buffer.drop
-   改措辞                  →  改 MemoryItem.text,再进 commit
-   Core memories 列表      ←  consolidated registry(status==consolidated;DESIGN.md 本就留给 UI 展示)
-   删 core memory          →  un-edit:swap 掉该 adapter 项 / 重建 codebook   ★ 后端要支持单条撤销
-   Reference 列表          ←  rag_store(route==rag 的项)
-   k = codebookK           ←  wrapper.get_codebook_size()
+   —— 写路径 / curation ————————————————————————————————————
+   ◐ Pending(buffer)    buffer.load_unconsolidated 已有;"propose 时标 new/supersede 喂 UI" 未拆出
+   ⬜ [写入]/[全部写入]   consolidate.run_pass(trigger) 是整桶提交、无审批;per-item 审批需拆 propose/commit
+   ⬜ [留作参考]         edit→rag 的 route override + rag_store.add,编排未做
+   ◐ [丢弃]             buffer.drop 已有
+   ◐ 改措辞             改 MemoryItem.text 已有,但要接进 commit 流程
+   ◐ Core memories 列表  可读 status==consolidated registry;但 serving /memories 端点为 stub
+   ⬜ 删 core memory      单条 un-edit(swap adapter 项 / 重建 codebook)后端不支持;codebook 现为 append-only
+   ✅ Reference 列表      rag_store(route==rag 的项)
+   ✅ k = codebookK       wrapper.get_codebook_size()
 
-   —— 证明开关 ————————————————————————————————————————————————
-   editOn 拨杆             →  serving.model_host.swap_edit_module(adapter | None)(零拷贝 setattr,SPIKE 0 已验)
-   ragOn 拨杆             →  generate.generate(with_rag)(build_prompt 的 RAG 窗恒在/INV-5,靠传空 rag_hits 关掉内容)
-   注:两个开关独立 → 拔 edit module 时 RAG 答案不动、反之亦然,这就是"两系统独立"的证明。
+   —— 证明开关(少数"接上就能真证明"的点)————————————————————————
+   ✅ editOn 拨杆        serving.model_host.swap_edit_module(adapter | None) · 零拷贝 setattr · SPIKE 0 已验
+   ✅ ragOn 拨杆        generate.generate(with_rag);build_prompt 的 RAG 窗恒在(INV-5),靠传空 rag_hits 关内容
+   注:两开关独立 → 拔 edit module 时 RAG 答案不动、反之亦然 —— 这是原型里少数"接真后端能直接证明"的位置。
 
 5. 设计 tokens(后续保持一致用)
    两副面孔:产品面暖白(助手说话用衬线)/ lab 冷石墨(数据用等宽);绿痕迹是贯穿两者的唯一线索。
@@ -103,6 +104,6 @@ Engram 前端设计综述(../visual_rcs/UI_design_visual_plan.jsx)
 
 6. 前端这侧要守的不变量
    · weights / buffer / refs ↔ 两速模型三层,别混(呼应后端 INV-3 / INV-4)。
-   · 唯一改模型权重的动作 = Memory 的[写入]/[全部写入] 与 editOn 开关 —— 视觉上也只有"写入"是实心绿。
+   · 叙事上唯一"改模型权重"的动作 = Memory 的[写入]/[全部写入] 与 editOn 开关 —— 视觉上也只有"写入"是实心绿(原型里是 mock 搬运,非真改权重)。
    · Engram 是唯一 state owner;子组件无副作用、只回调。
    · 同一 buffer 喂 Pending 与 lab staged,单一真相源。
