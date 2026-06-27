@@ -38,7 +38,7 @@ def _load_env_file(path: str = _ENV_PATH) -> None:
 
 # Resolve the default model after .env is available so OPENROUTER_MODEL is honored.
 _load_env_file()
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "qwen/qwen3.7-max")
 
 _client = None  # module singleton, created on first complete() call
 
