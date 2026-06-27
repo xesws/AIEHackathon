@@ -35,14 +35,22 @@ def edit(model: Any, memory: Any, *, key_mode: str = "chat") -> dict:
     Delegates entirely to ``third_party.horen`` (``apply_horen_to_model``); no HoReN logic here.
     """
     # imported lazily — model_host's import already put third_party/horen on sys.path
+    from src.models.horen.editor import HOREN
     from src.models.horen.horen_main import apply_horen_to_model
 
     request = memory if isinstance(memory, dict) else {"prompt": memory.text, "target_new": ""}
     tok = model_host.tokenizer()
     hp = model_host.hparams()
 
+    # Sequential editing (v0.5): after the first edit, the resident model IS the HOREN wrapper.
+    # apply_horen_to_model expects the underlying HF model (it traverses model.model.layers…), so
+    # unwrap one level — else HOREN.__init__ does parent_module(wrapper, "model.layers…") and fails
+    # with "model.layers not found". Unwrapped, HOREN.__init__ finds the existing HopfieldAdapter
+    # and add_key APPENDS into the SAME codebook → N edits stack instead of nesting wrappers.
+    hf_model = model.model if isinstance(model, HOREN) else model
+
     t0 = time.time()
-    wrapper, reset_fn = apply_horen_to_model(model, tok, [request], hp)
+    wrapper, reset_fn = apply_horen_to_model(hf_model, tok, [request], hp)
     edit_seconds = time.time() - t0
 
     adapter = model_host.edit_module()  # the now-installed HopfieldAdapter
