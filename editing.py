@@ -19,12 +19,18 @@ from typing import Any
 import serving.model_host as model_host
 
 
-def edit(model: Any, memory: Any) -> dict:
+def edit(model: Any, memory: Any, *, key_mode: str = "chat") -> dict:
     """Apply ONE HoReN edit onto the resident ``model``; return the installed adapter + timing.
 
     ``memory``: for SPIKE 0, a request dict ``{"prompt": ..., "target_new": ...}`` (extra keys
     like ``subject`` are ignored by HoReN's tokenizer). The ``MemoryItem.text -> (prompt,
     subject, target_new)`` decomposition is deferred to v0.3.
+
+    ``key_mode`` (v0.3 Plan B):
+      - ``"chat"`` (default, the fix): after the edit, APPEND a query-span-isolated chat key
+        (the hero chat render of the stem) that reuses the same trained value, so the codebook
+        serves BOTH the raw path (HoReN's native key) and the chat path (the appended key).
+      - ``"raw"``: legacy — keep only HoReN's native raw key.
 
     Delegates entirely to ``third_party.horen`` (``apply_horen_to_model``); no HoReN logic here.
     """
@@ -40,6 +46,9 @@ def edit(model: Any, memory: Any) -> dict:
     edit_seconds = time.time() - t0
 
     adapter = model_host.edit_module()  # the now-installed HopfieldAdapter
+    if key_mode == "chat":
+        _append_chat_key(wrapper, adapter, tok, request["prompt"])
+
     model_host.register_edit_module(adapter, edited_model=wrapper)
 
     return {
@@ -49,3 +58,20 @@ def edit(model: Any, memory: Any) -> dict:
         "edit_seconds": edit_seconds,
         "codebook_size": wrapper.get_codebook_size(),
     }
+
+
+def _append_chat_key(wrapper: Any, adapter: Any, tok: Any, stem: str) -> None:
+    """Append a Plan-B query-span chat key for ``stem`` that reuses the value row HoReN just
+    trained. Keeps the raw key intact (raw path stays green); the chat read-key now matches."""
+    import torch
+
+    from keying import compute_key
+
+    chat_key = compute_key(stem, templated=True, hf_model=wrapper.model, tok=tok, adapter=adapter)
+    v_idx = wrapper.edit_log["chosen_key"]  # the just-trained value/label row
+    adapter.keys = torch.cat([adapter.keys, chat_key.to(adapter.keys.dtype)], dim=0)
+    adapter.values = torch.nn.Parameter(
+        torch.cat([adapter.values, adapter.values[v_idx : v_idx + 1]], dim=0),
+        requires_grad=adapter.values.requires_grad,
+    )
+    adapter.key_labels.append(adapter.key_labels[v_idx])

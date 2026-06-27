@@ -35,6 +35,24 @@ def _greedy(model: Any, tok: Any, prompt_text: str, *, max_new_tokens: int, devi
     return tok.decode(gen, skip_special_tokens=True).lstrip()
 
 
+def _set_read_query_span(tok: Any, query: str, prompt_text: str, use_chat_template: bool) -> None:
+    """v0.3 Plan B: tell the active HoReN adapter which rows are the query span (chat path),
+    or clear it (raw path) so a prior chat call never leaks into a later raw call. Located in
+    the REAL rendered prompt; no-op when no edit is installed."""
+    try:
+        import serving.model_host as model_host
+        from keying import query_span_in_rendered
+
+        adapter = model_host.edit_module()
+    except Exception:
+        return
+    if not hasattr(adapter, "query_span"):
+        return
+    adapter.query_span = (
+        query_span_in_rendered(tok, prompt_text, query) if use_chat_template else None
+    )
+
+
 def generate(
     query: str,
     *,
@@ -63,4 +81,5 @@ def generate(
     else:
         prompt_text = query
 
+    _set_read_query_span(tok, query, prompt_text, use_chat_template)
     return _greedy(model, tok, prompt_text, max_new_tokens=max_new_tokens, device=device)
