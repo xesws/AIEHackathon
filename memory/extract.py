@@ -249,3 +249,43 @@ def extract(chat: Sequence[dict]) -> list[MemoryItem]:
         items.append(item)
 
     return items
+
+
+_DECOMPOSE_SYSTEM = (
+    "You decompose a SINGLE statement into an editable cloze. "
+    "Given one statement, return STRICT JSON "
+    '{"stem": <cloze/question stem>, "target": <the answer/value>, '
+    '"subject": <the entity the statement is about>} such that stem + target '
+    "reconstruct the original statement. The stem is the statement with the target "
+    "removed (a fill-in-the-blank prefix or question); the target is the specific "
+    "answer/value being taught; the subject is the entity. Work in the statement's own "
+    "language; do NOT translate."
+)
+
+
+def decompose(text: str) -> "dict | None":
+    """One focused LLM call to split a single statement into ``{stem, target, subject}``.
+
+    Mirrors ``_extract_window``'s JSON-mode style: asks the model for STRICT JSON whose
+    ``stem`` + ``target`` reconstruct ``text``. Returns the decomposition only when both
+    ``stem`` and ``target`` come back as non-empty strings (``subject`` defaults to
+    ``""``); returns ``None`` on any malformed output, parse error, or LLM failure. Never
+    raises.
+    """
+    try:
+        messages = [
+            {"role": "system", "content": _DECOMPOSE_SYSTEM},
+            {"role": "user", "content": text},
+        ]
+        raw = llm.complete(
+            messages, temperature=0.0, response_format={"type": "json_object"}
+        )
+        data = json.loads(raw)
+        s = data.get("stem")
+        t = data.get("target")
+        subj = data.get("subject")
+        if isinstance(s, str) and s.strip() and isinstance(t, str) and t.strip():
+            return {"stem": s, "target": t, "subject": subj or ""}
+        return None
+    except Exception:
+        return None

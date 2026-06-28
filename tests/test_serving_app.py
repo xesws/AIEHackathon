@@ -62,7 +62,13 @@ def env(monkeypatch):
     # Opaque sentinels — the "model" and "tokenizer" are never used, only passed through.
     rec.sentinel_model = object()
     rec.sentinel_tok = object()
-    rec.search_hits = ["HIT"]    # what rag_store.search returns (a sentinel list)
+    # Real MemoryItem(s) so chat()'s ``retrieved`` field (schema.to_dict) serializes them.
+    rec.search_hits = [
+        schema.MemoryItem(
+            id="rag1", type="fact", text="rag hit", route="rag",
+            status="consolidated", source="doc", ts=1.0, provenance=None,
+        )
+    ]
 
     # Real MemoryItems so the (REAL, unstubbed) schema.to_dict serializes them in /memories
     # and so buffer_count reflects a concrete length.
@@ -131,6 +137,9 @@ def env(monkeypatch):
             return list(rec.cons_items)
         return []
 
+    def fake_rag_all():
+        return []  # /memories now also reports a rag slice; empty in these tests
+
     # ---- patch the source-module attributes app.py resolves at call time -------
     monkeypatch.setattr(model_host, "load_base", fake_load_base)
     monkeypatch.setattr(model_host, "current_model", fake_current_model)
@@ -142,6 +151,7 @@ def env(monkeypatch):
     monkeypatch.setattr(rag_store, "search", fake_search)
     monkeypatch.setattr(buffer, "load_unconsolidated", fake_load_unconsolidated)
     monkeypatch.setattr(store, "by_status", fake_by_status)
+    monkeypatch.setattr(store, "rag_all", fake_rag_all)
 
     # Import app AFTER patching. Prefer the module-level ``app`` (what uvicorn serves);
     # fall back to building one. Either reference resolves the patched collaborators at
@@ -227,7 +237,7 @@ def test_chat_rag_on_uses_search(env):
     assert rec.search_calls[0]["k"] == 5
 
     kwargs = rec.generate_calls[0]["kwargs"]
-    assert kwargs["rag_hits"] == rec.search_hits  # the search sentinel list (["HIT"])
+    assert kwargs["rag_hits"] == rec.search_hits  # the search hit list, forwarded as-is
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -264,8 +274,8 @@ def test_memories_reads_store(env):
     assert len(body["buffer"]) == 1
     assert len(body["consolidated"]) == 2
 
-    # counts mirror the list lengths.
-    assert body["counts"] == {"buffer": 1, "consolidated": 2}
+    # counts mirror the list lengths (rag slice now included, empty here).
+    assert body["counts"] == {"buffer": 1, "consolidated": 2, "rag": 0}
 
     # items were serialized via schema.to_dict (real, unstubbed) -> plain dicts with fields.
     assert body["buffer"][0]["id"] == "buf1"

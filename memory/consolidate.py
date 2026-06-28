@@ -13,6 +13,7 @@ from .schema import (
     PROV_EDIT_REF,
     PROV_SUPERSEDED_BY,
     PROV_SUPERSEDES,
+    Decision,
     MemoryItem,
 )
 
@@ -99,7 +100,74 @@ def _edit_with_retry(editing: Any, model: Any, req: dict, item_id: str) -> Any:
     return _EDIT_FAILED
 
 
-def run_pass(trigger: str) -> int:
+def _process_item(it: MemoryItem, registry: list[MemoryItem], model: Any, editing: Any) -> int:
+    """Consolidate ONE buffer item; return 1 iff a write happened (NEW or SUPERSEDE), else 0.
+
+    Mirrors the original per-item loop body exactly: classify ``it`` against ``registry``
+    (the in-pass-growing list of consolidated edit-route memory). A ``duplicate`` records
+    ``PROV_DUPLICATE_OF`` and drains the buffer (return 0); otherwise edit FIRST and only on
+    a successful ``editing.edit`` retire any olds, flip ``it`` to ``consolidated`` and drain
+    it (return 1). A failed edit leaves ``it`` in the buffer and returns 0 (no drop, no
+    retire). ``registry`` is mutated in place so later items in the same pass see this write.
+    """
+    # BATCH DEDUP coordination: we call the frozen 2-arg ``dedup.classify(it,
+    # registry)`` form. ``dedup.classify`` does not expose a precomputed-vectors
+    # keyword in its required signature, so passing one here would be a guess;
+    # per-pass embedding reuse is delegated to ``dedup``'s own internal caching.
+    # This keeps NO change to dedup's contract and favors correctness over the
+    # micro-optimization (the registry also grows in-pass, which a single
+    # precompute could not capture).
+    d = dedup.classify(it, registry)
+
+    if d.verdict == "duplicate":
+        it.provenance = {**(it.provenance or {}), PROV_DUPLICATE_OF: d.target_id}
+        store.upsert(it)
+        buffer.drop([it.id])
+        return 0
+
+    # MULTI-TARGET SUPERSEDE: a candidate may retire several old memories at
+    # once. Prefer ``target_ids`` (FULL tier); fall back to the single
+    # ``target_id`` for back-compat. Targets already gone (concurrency) are
+    # dropped here -> degrades toward a plain NEW write.
+    olds = []
+    if d.verdict == "supersede":
+        target_ids = d.target_ids or ([d.target_id] if d.target_id else [])
+        olds = [o for o in (store.get(tid) for tid in target_ids) if o is not None]
+
+    req = build_edit_request(it)
+
+    # Ordered best-effort atomicity: edit FIRST; only on success do we retire
+    # the olds and write the new item. Retry the edit before giving up.
+    ref = _edit_with_retry(editing, model, req, it.id)
+    if ref is _EDIT_FAILED:
+        # Do NOT drop, do NOT count, do NOT retire olds: leave in buffer for next pass.
+        return 0
+
+    if olds:
+        for old in olds:
+            old.status = "retired"
+            old.provenance = {**(old.provenance or {}), PROV_SUPERSEDED_BY: it.id}
+            store.upsert(old)
+        retired_ids = [old.id for old in olds]
+        # Single id stays a bare string for back-compat; multi-target -> list.
+        it.provenance = {
+            **(it.provenance or {}),
+            PROV_SUPERSEDES: retired_ids[0] if len(retired_ids) == 1 else retired_ids,
+        }
+
+    it.status = "consolidated"
+    it.provenance = {
+        **(it.provenance or {}),
+        PROV_EDIT_REF: _ref_id(ref),
+        PROV_CONSOLIDATED_AT: time.time(),
+    }
+    store.upsert(it)
+    registry.append(it)  # same-pass visibility for later near-dupes
+    buffer.drop([it.id])
+    return 1  # counts the successful edit once (NEW or SUPERSEDE)
+
+
+def run_pass(trigger: str, ids=None) -> int:
     """Run one consolidation pass (invoked by ``serving/triggers.py``).
 
     For each unconsolidated buffer item: classify vs. consolidated edit-route memory via
@@ -119,64 +187,20 @@ def run_pass(trigger: str) -> int:
     import editing
 
     items = buffer.load_unconsolidated()
+    if ids is not None:
+        idset = set(ids)
+        items = [it for it in items if it.id in idset]
     registry = [m for m in store.by_status("consolidated") if m.route == "edit"]
-    n_written = 0
-
-    for it in items:
-        # BATCH DEDUP coordination: we call the frozen 2-arg ``dedup.classify(it,
-        # registry)`` form. ``dedup.classify`` does not expose a precomputed-vectors
-        # keyword in its required signature, so passing one here would be a guess;
-        # per-pass embedding reuse is delegated to ``dedup``'s own internal caching.
-        # This keeps NO change to dedup's contract and favors correctness over the
-        # micro-optimization (the registry also grows in-pass, which a single
-        # precompute could not capture).
-        d = dedup.classify(it, registry)
-
-        if d.verdict == "duplicate":
-            it.provenance = {**(it.provenance or {}), PROV_DUPLICATE_OF: d.target_id}
-            store.upsert(it)
-            buffer.drop([it.id])
-            continue
-
-        # MULTI-TARGET SUPERSEDE: a candidate may retire several old memories at
-        # once. Prefer ``target_ids`` (FULL tier); fall back to the single
-        # ``target_id`` for back-compat. Targets already gone (concurrency) are
-        # dropped here -> degrades toward a plain NEW write.
-        olds = []
-        if d.verdict == "supersede":
-            target_ids = d.target_ids or ([d.target_id] if d.target_id else [])
-            olds = [o for o in (store.get(tid) for tid in target_ids) if o is not None]
-
-        req = build_edit_request(it)
-
-        # Ordered best-effort atomicity: edit FIRST; only on success do we retire
-        # the olds and write the new item. Retry the edit before giving up.
-        ref = _edit_with_retry(editing, model, req, it.id)
-        if ref is _EDIT_FAILED:
-            # Do NOT drop, do NOT count, do NOT retire olds: leave in buffer for next pass.
-            continue
-
-        if olds:
-            for old in olds:
-                old.status = "retired"
-                old.provenance = {**(old.provenance or {}), PROV_SUPERSEDED_BY: it.id}
-                store.upsert(old)
-            retired_ids = [old.id for old in olds]
-            # Single id stays a bare string for back-compat; multi-target -> list.
-            it.provenance = {
-                **(it.provenance or {}),
-                PROV_SUPERSEDES: retired_ids[0] if len(retired_ids) == 1 else retired_ids,
-            }
-
-        it.status = "consolidated"
-        it.provenance = {
-            **(it.provenance or {}),
-            PROV_EDIT_REF: _ref_id(ref),
-            PROV_CONSOLIDATED_AT: time.time(),
-        }
-        store.upsert(it)
-        registry.append(it)  # same-pass visibility for later near-dupes
-        buffer.drop([it.id])
-        n_written += 1  # counts the successful edit once (NEW or SUPERSEDE)
-
+    n_written = sum(_process_item(it, registry, model, editing) for it in items)
     return n_written
+
+
+def preview_verdict(item: MemoryItem) -> Decision:
+    """Read-only dedup preview: classify ``item`` against the live edit-route registry.
+
+    Pure read — performs NO store mutation, NO buffer drop, and NO ``editing.edit``. Returns
+    the ``dedup.classify`` ``Decision`` (verdict + target ids) so callers can surface the
+    would-be outcome (duplicate / supersede / new) without committing a consolidation.
+    """
+    registry = [m for m in store.by_status("consolidated") if m.route == "edit"]
+    return dedup.classify(item, registry)

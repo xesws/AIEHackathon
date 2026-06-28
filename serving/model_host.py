@@ -90,6 +90,19 @@ def edit_module() -> Any:
     return getattr(_S["parent"], _S["attr"])
 
 
+def recorded_adapter() -> Any:
+    """The adapter recorded by ``register_edit_module`` (the edit module), or ``None``."""
+    return _S["adapter"]
+
+
+def edit_active() -> bool:
+    """True iff the recorded adapter is currently installed at the inner_params slot."""
+    parent = _S["parent"]
+    if parent is None:
+        return False
+    return _S["adapter"] is not None and getattr(parent, _S["attr"]) is _S["adapter"]
+
+
 def register_edit_module(adapter: Any, edited_model: Any = None) -> None:
     """Record the installed adapter and (optionally) switch the resident model to the
     HOREN wrapper, whose ``.generate`` sets ``key_id`` for correct retrieval at decode."""

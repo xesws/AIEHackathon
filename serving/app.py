@@ -17,16 +17,19 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Import MODULES (not symbols) so tests can monkeypatch the attributes we call.
 # ``consolidate`` is aliased to ``consolidate_mod`` because the POST /consolidate handler
 # below is itself named ``consolidate`` (would otherwise shadow the memory module).
 import generate
-from memory import buffer, rag_store, schema, store
+from memory import buffer, extract, rag_store, schema, store
 from memory import consolidate as consolidate_mod
 from serving import ingest, model_host, triggers
 
@@ -40,6 +43,22 @@ class ChatRequest(BaseModel):
 class ConsolidateRequest(BaseModel):
     # Optional / empty body: {} or {"trigger": "manual"}.
     trigger: str = "manual"
+
+
+class ConsolidateItemRequest(BaseModel):
+    id: str
+
+
+class RouteRequest(BaseModel):
+    route: str
+
+
+class PatchRequest(BaseModel):
+    text: str
+
+
+class EditModuleRequest(BaseModel):
+    on: bool
 
 
 # --- handlers (module-level so they stay importable/testable) ---------------------------
@@ -71,6 +90,9 @@ def chat(payload: ChatRequest) -> dict:
         "reply": reply,
         "buffer_count": len(buffer.load_unconsolidated()),
         "learned": result["edit_ids"],
+        "retrieved": [schema.to_dict(h) for h in rag_hits],
+        "extracted": result["n_extracted"],
+        "rag_indexed": result["n_rag_indexed"],
     }
 
 
@@ -87,10 +109,82 @@ def memories() -> dict:
     """GET /memories — buffer + consolidated items (+ counts) for the UI."""
     buf = store.by_status("buffer")
     con = store.by_status("consolidated")
+    rag = store.rag_all()  # materialize once (was called twice)
     return {
         "buffer": [schema.to_dict(i) for i in buf],
         "consolidated": [schema.to_dict(i) for i in con],
-        "counts": {"buffer": len(buf), "consolidated": len(con)},
+        "rag": [schema.to_dict(it) for it, _vec in rag],
+        "counts": {"buffer": len(buf), "consolidated": len(con), "rag": len(rag)},
+    }
+
+
+def consolidate_item(payload: ConsolidateItemRequest) -> dict:
+    """POST /consolidate/item — consolidate a single buffer item by id."""
+    return {
+        "n_written": triggers.manual(ids=[payload.id]),
+        "buffer_count": len(buffer.load_unconsolidated()),
+    }
+
+
+def drop_memory(item_id: str) -> dict:
+    """POST /memories/{item_id}/drop — discard a buffer item (must still be in buffer)."""
+    it = store.get(item_id)
+    if it is None or it.status != "buffer":
+        raise HTTPException(404, "buffer item not found")
+    buffer.drop([item_id])
+    return {"ok": True, "buffer_count": len(buffer.load_unconsolidated())}
+
+
+def route_memory(item_id: str, payload: RouteRequest) -> dict:
+    """POST /memories/{item_id}/route — re-route a buffer item to rag (rag only)."""
+    if payload.route != "rag":
+        raise HTTPException(400, "only route=rag supported")
+    it = store.get(item_id)
+    if it is None or it.status != "buffer":
+        raise HTTPException(404, "buffer item not found")
+    # Drop from the buffer FIRST (while the status guard still holds), then index into rag.
+    buffer.drop([item_id])
+    it.route = "rag"
+    rag_store.add(it)
+    return {"ok": True, "buffer_count": len(buffer.load_unconsolidated())}
+
+
+def patch_memory(item_id: str, payload: PatchRequest) -> dict:
+    """PATCH /memories/{item_id} — edit a buffer item's text and re-decompose it."""
+    it = store.get(item_id)
+    if it is None or it.status != "buffer":
+        raise HTTPException(404, "buffer item not found")
+    it.text = payload.text
+    d = extract.decompose(payload.text)
+    if d:
+        it.provenance = {**(it.provenance or {}), schema.PROV_EDIT: d}
+    store.upsert(it)
+    return {"item": schema.to_dict(it)}
+
+
+def edit_module(payload: EditModuleRequest) -> dict:
+    """POST /edit-module — enable/disable the recorded edit adapter on the resident model."""
+    if payload.on:
+        adapter = model_host.recorded_adapter()
+        if adapter is None:
+            raise HTTPException(409, "no edit module to enable")
+        model_host.swap_edit_module(adapter)
+    else:
+        model_host.swap_edit_module(None)
+    return {"on": payload.on}
+
+
+def health() -> dict:
+    """GET /health — readiness + edit state + memory counts."""
+    c = {
+        "buffer": len(store.by_status("buffer")),
+        "consolidated": len(store.by_status("consolidated")),
+        "rag": len(store.rag_all()),
+    }
+    return {
+        "ready": model_host.current_model() is not None,
+        "edit_on": model_host.edit_active(),
+        "counts": c,
     }
 
 
@@ -113,6 +207,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Every error surfaces as {"error": ...}; FastAPI's HTTPException subclasses the Starlette
+    # one, so this pair covers raised 4xx (404/400/409) and any unexpected 500 — never a
+    # fake-success body.
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request, exc):
+        # Malformed request body -> same {"error": ...} envelope (not FastAPI's {"detail": [...]}).
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(request, exc):
+        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+    @app.exception_handler(Exception)
+    async def _unexpected_error(request, exc):
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
     # Register the module-level handlers as routes (thin wrappers keep response shapes exact).
     @app.post("/chat")
     def _chat(payload: ChatRequest) -> dict:
@@ -125,6 +235,30 @@ def create_app() -> FastAPI:
     @app.get("/memories")
     def _memories() -> dict:
         return memories()
+
+    @app.post("/consolidate/item")
+    def _consolidate_item(payload: ConsolidateItemRequest) -> dict:
+        return consolidate_item(payload)
+
+    @app.post("/memories/{item_id}/drop")
+    def _drop_memory(item_id: str) -> dict:
+        return drop_memory(item_id)
+
+    @app.post("/memories/{item_id}/route")
+    def _route_memory(item_id: str, payload: RouteRequest) -> dict:
+        return route_memory(item_id, payload)
+
+    @app.patch("/memories/{item_id}")
+    def _patch_memory(item_id: str, payload: PatchRequest) -> dict:
+        return patch_memory(item_id, payload)
+
+    @app.post("/edit-module")
+    def _edit_module(payload: EditModuleRequest) -> dict:
+        return edit_module(payload)
+
+    @app.get("/health")
+    def _health() -> dict:
+        return health()
 
     # Serve the static frontend from THIS app (single origin) so the SPA + the 3 API routes
     # share one host/port — no CORS, no mixed-content, nothing to configure for the browser.

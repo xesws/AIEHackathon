@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from memory import buffer, extract, rag_store
+from memory import buffer, consolidate, extract, rag_store, store
 
 
 def ingest(chat: Sequence[dict]) -> dict:
@@ -38,6 +38,15 @@ def ingest(chat: Sequence[dict]) -> dict:
         if it.route == "edit":
             buffer.append(it)          # EVERY edit-route item — never just items[0]
             edit_ids.append(it.id)
+            try:
+                d = consolidate.preview_verdict(it)
+                it.provenance = {**(it.provenance or {}), "verdict": d.verdict, "verdict_target_id": d.target_id}
+                if d.target_id:
+                    tgt = store.get(d.target_id)
+                    if tgt: it.provenance["verdict_target_text"] = tgt.text
+                store.upsert(it)
+            except Exception:
+                pass
         elif it.route == "rag":
             rag_store.add(it)
             n_rag += 1
