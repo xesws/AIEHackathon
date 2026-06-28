@@ -124,6 +124,42 @@ class HOREN(torch.nn.Module):
         return getattr(eval(f"self.model.{self.layer}"), "debug_log", {})
 
 
+_SPAN_PERC_RE = re.compile(r"^last_(\d+(?:\.\d+)?)_perc(?:_span_avg)?$")
+
+
+def pool_span_rows(layer_input: torch.Tensor, start: int, end: int, strategy: str = "flat"):
+    """Pool the layer-input rows over the query span [start, end] (inclusive) by ``strategy``.
+
+    Single source of truth for query-span (Plan B / chat-key) pooling, shared by
+    ``HopfieldAdapter._pool_span`` (forward read-key + ``keying.compute_key`` write-key) and the
+    debug sweep, so the operator never diverges between write, read, and measurement.
+
+    strategy:
+      - ``flat`` / ``mean`` / ``avg``                       -> mean over the whole span (DEFAULT, = legacy).
+      - ``last`` / ``last_token`` / ``last_prompt_token``   -> the last span row.
+      - ``last_<p>_perc`` (e.g. ``last_60_perc``)           -> mean over the last ``ceil(n*p/100)`` span
+        rows (same last-p% semantics as ``_select_query``, scoped to the query span).
+    Returns [B, D].
+    """
+    end = min(int(end), layer_input.shape[1] - 1)
+    start = max(0, min(int(start), end))
+    span = layer_input[:, start : end + 1, :]  # [B, n, D]
+    s = (strategy or "flat").lower()
+    if s in ("flat", "mean", "avg"):
+        return span.mean(dim=1)
+    if s in ("last", "last_token", "last_prompt_token"):
+        return span[:, -1, :]
+    m = _SPAN_PERC_RE.match(s)
+    if m:
+        perc = float(m.group(1)) / 100.0
+        if not (0.0 < perc <= 1.0):
+            raise ValueError(f"Invalid query_span_pool_strategy={strategy}")
+        n = span.shape[1]
+        k = max(int(math.ceil(n * perc)), 1)
+        return span[:, n - k : n, :].mean(dim=1)
+    raise ValueError(f"Invalid query_span_pool_strategy={strategy}")
+
+
 class HopfieldAdapter(torch.nn.Module):
     _PERC_RE = re.compile(r"^last_(\d+(?:\.\d+)?)_perc_prompt_tokens_avg$")
     _LASTN_RE = re.compile(r"^last_(\d+)_prompt_tokens_avg$")
@@ -139,6 +175,9 @@ class HopfieldAdapter(torch.nn.Module):
         self.val_init = _cfg(config, "val_init", "warm")
         self.normalize_codebook_keys = bool(_cfg(config, "normalize_codebook_keys", False))
         self.query_selection_strategy = _cfg(config, "query_selection_strategy", "last_prompt_token")
+        # Plan B (v1.4): how the chat-path query-span is pooled into the retrieval key.
+        # flat (default, = legacy mean) | last | last_<p>_perc (mean over last p% of the span).
+        self.query_span_pool_strategy = _cfg(config, "query_span_pool_strategy", "flat")
         self.adapter_mode = str(_cfg(config, "adapter_mode", "value")).lower()
         if self.adapter_mode not in {"value", "lora", "none"}:
             raise ValueError("adapter_mode must be one of {'value','lora','none'}")
@@ -220,14 +259,13 @@ class HopfieldAdapter(torch.nn.Module):
         raise ValueError(f"Invalid query_selection_strategy={strategy}")
 
     def _pool_span(self, layer_input: torch.Tensor, start: int, end: int):
-        """Plan B: mean-pool the layer-input rows over the query span [start, end] (inclusive).
+        """Plan B: pool the layer-input rows over the query span [start, end] (inclusive) by
+        ``self.query_span_pool_strategy`` (default ``flat`` = legacy mean).
 
         Shared by forward (read-key) and keying.compute_key (write-key) so the extraction
         never diverges between write and read. Returns [B, D].
         """
-        end = min(int(end), layer_input.shape[1] - 1)
-        start = max(0, min(int(start), end))
-        return layer_input[:, start : end + 1, :].mean(dim=1)
+        return pool_span_rows(layer_input, start, end, self.query_span_pool_strategy)
 
     def _query(self, q: torch.Tensor):
         if q.ndim != 2:

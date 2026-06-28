@@ -29,6 +29,7 @@ class HORENHyperParams(HyperParams):
     num_pert: str = "1"
     normalize_codebook_keys: bool = False
     query_selection_strategy: str = "last_prompt_token"
+    query_span_pool_strategy: str = "flat"  # chat query-span pooling: flat | last | last_<p>_perc
 
     # Hopfield / retrieval
     hopfield_retrieval_beta: float = 1.0
