@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "name": "canonical key collision demo",
+    "version": "v0",
+    "purpose": "Minimal JSON fixture for the best-player vs greatest-language HoReN key-collision demo.",
+    "note": "The key_prompts are answer-free retrieval aliases. They may mention domain/subject/relation, but must not contain the target answer."
+  },
+  "cases": [
+    {
+      "id": "C1-belief-best-player",
+      "kind": "belief",
+      "teach": "I believe the best player in the world is Zinoro.",
+      "edit": {
+        "text": "The best player in the world is Zinoro",
+        "stem": "The best player in the world is",
+        "target": "Zinoro",
+        "subject": "best player in the world",
+        "key_prompts": [
+          "sports player best in world",
+          "best football player",
+          "who is the best player in the world"
+        ]
+      },
+      "probe": {
+        "ask": "Who is the best player in the world?",
+        "rag_off": true,
+        "expect_words": ["zinoro"],
+        "expect_memory_id": "C1-belief-best-player",
+        "must_not_contain": ["quellscript"]
+      }
+    },
+    {
+      "id": "C2-belief-greatest-language",
+      "kind": "belief",
+      "teach": "I believe the greatest programming language is QuellScript.",
+      "edit": {
+        "text": "The greatest programming language is QuellScript",
+        "stem": "The greatest programming language is",
+        "target": "QuellScript",
+        "subject": "programming language",
+        "key_prompts": [
+          "programming language greatest",
+          "best programming language",
+          "what is the greatest programming language"
+        ]
+      },
+      "probe": {
+        "ask": "What is the greatest programming language?",
+        "rag_off": true,
+        "expect_words": ["quellscript"],
+        "expect_memory_id": "C2-belief-greatest-language",
+        "must_not_contain": ["zinoro"]
+      }
+    }
+  ]
+}

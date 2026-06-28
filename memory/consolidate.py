@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Callable, Optional
 
@@ -12,6 +13,7 @@ from .schema import (
     PROV_DUPLICATE_OF,
     PROV_EDIT,
     PROV_EDIT_REF,
+    PROV_KEY_PROMPTS,
     PROV_SUPERSEDED_BY,
     PROV_SUPERSEDES,
     Decision,
@@ -52,11 +54,12 @@ def build_edit_request(item: MemoryItem) -> dict:
     edit = (item.provenance or {}).get(PROV_EDIT)
     if not edit:
         logger.warning("consolidate: item %s has no %s provenance; falling back to raw text", item.id, PROV_EDIT)
-        return {"prompt": item.text, "target_new": ""}
+        return {"prompt": item.text, "target_new": "", PROV_KEY_PROMPTS: []}
     return {
         "prompt": edit["stem"],
         "target_new": edit["target"],
         "subject": edit.get("subject", ""),
+        PROV_KEY_PROMPTS: _key_prompts(item, edit),
     }
 
 
@@ -69,6 +72,74 @@ def _ref_id(ref: Any) -> int:
 
 # Sentinel distinguishing "edit produced no value" from "edit failed all attempts".
 _EDIT_FAILED = object()
+
+_KEY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has",
+    "have", "he", "her", "him", "his", "i", "in", "is", "it", "its", "me",
+    "my", "of", "on", "or", "our", "she", "that", "the", "their", "them",
+    "they", "this", "to", "user", "was", "were", "with", "world",
+}
+
+
+def _clean_key_prompt(text: str, target: str = "") -> str:
+    """Normalize an answer-free retrieval prompt for extra codebook keys."""
+    s = (text or "").strip()
+    if target:
+        s = re.sub(re.escape(target), " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"[-_>]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" .,:;!?-_")
+    return s
+
+
+def _fallback_key_prompts(item: MemoryItem, edit: dict) -> list[str]:
+    """Cheap canonical key prompts for demo-grade disambiguation.
+
+    These prompts intentionally omit the target answer. They emphasize the relation/domain
+    words from the stem/text so near-superlatives like "best player" vs "greatest language"
+    get additional, more separable codebook keys without changing HoReN itself.
+    """
+    target = str(edit.get("target") or "")
+    subject = _clean_key_prompt(str(edit.get("subject") or ""), target)
+    stem = _clean_key_prompt(str(edit.get("stem") or ""), target)
+    text = _clean_key_prompt(item.text, target)
+
+    words = [
+        w
+        for w in re.findall(r"[A-Za-z0-9]+", f"{subject} {stem} {text}".lower())
+        if len(w) > 2 and w not in _KEY_STOPWORDS and w != target.lower()
+    ]
+    keyword = " ".join(list(dict.fromkeys(words))[:8])
+
+    candidates = [stem, text, keyword]
+    if subject and keyword and subject.lower() not in keyword:
+        candidates.append(f"{subject} {keyword}")
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in candidates:
+        c = _clean_key_prompt(c, target)
+        key = c.lower()
+        if c and key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out[:4]
+
+
+def _key_prompts(item: MemoryItem, edit: dict) -> list[str]:
+    """Merge LLM-provided canonical prompts with deterministic fallbacks."""
+    raw = edit.get(PROV_KEY_PROMPTS) or []
+    provided = [p.strip() for p in raw if isinstance(p, str) and p.strip()]
+    fallback = _fallback_key_prompts(item, edit)
+    out: list[str] = []
+    seen: set[str] = set()
+    target = str(edit.get("target") or "")
+    for p in [*provided, *fallback]:
+        p = _clean_key_prompt(p, target)
+        key = p.lower()
+        if p and key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out[:6]
 
 
 def _edit_with_retry(editing: Any, model: Any, req: dict, item_id: str) -> Any:
@@ -168,7 +239,12 @@ def _process_item(it: MemoryItem, registry: list[MemoryItem], model: Any, editin
     try:
         if isinstance(ref, dict) and "codebook_size" in ref:
             native = int(ref["wrapper"].edit_log["chosen_key"])
-            it.provenance[PROV_CODEBOOK_KEYS] = {"native": native, "chat": int(ref["codebook_size"]) - 1}
+            appended = [int(i) for i in ref.get("appended_key_indices", [])]
+            it.provenance[PROV_CODEBOOK_KEYS] = {
+                "native": native,
+                "chat": appended[0] if appended else int(ref["codebook_size"]) - 1,
+                "canonical": appended[1:],
+            }
     except Exception:
         logger.warning("consolidate: could not record codebook keys for item %s", it.id, exc_info=True)
     store.upsert(it)

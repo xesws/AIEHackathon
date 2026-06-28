@@ -16,6 +16,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from memory.schema import PROV_KEY_PROMPTS
 import serving.model_host as model_host
 
 
@@ -63,8 +64,14 @@ def edit(model: Any, memory: Any, *, key_mode: str = "chat") -> dict:
     edit_seconds = time.time() - t0
 
     adapter = model_host.edit_module()  # the now-installed HopfieldAdapter
+    appended_key_indices: list[int] = []
     if key_mode == "chat":
-        _append_chat_key(wrapper, adapter, tok, request["prompt"])
+        appended_key_indices = _append_chat_keys(
+            wrapper,
+            adapter,
+            tok,
+            [request["prompt"], *request.get(PROV_KEY_PROMPTS, [])],
+        )
 
     model_host.register_edit_module(adapter, edited_model=wrapper)
 
@@ -74,21 +81,48 @@ def edit(model: Any, memory: Any, *, key_mode: str = "chat") -> dict:
         "reset": reset_fn,
         "edit_seconds": edit_seconds,
         "codebook_size": wrapper.get_codebook_size(),
+        "appended_key_indices": appended_key_indices,
     }
 
 
-def _append_chat_key(wrapper: Any, adapter: Any, tok: Any, stem: str) -> None:
-    """Append a Plan-B query-span chat key for ``stem`` that reuses the value row HoReN just
-    trained. Keeps the raw key intact (raw path stays green); the chat read-key now matches."""
+def _append_chat_keys(wrapper: Any, adapter: Any, tok: Any, prompts: list[str]) -> list[int]:
+    """Append Plan-B query-span chat keys that reuse the value row HoReN just trained.
+
+    Keeps the native raw key intact. Additional canonical prompts are answer-free retrieval
+    aliases for the same belief, useful for separating near-colliding superlative queries
+    such as "best player" vs "greatest language" without changing HoReN retrieval logic.
+    Returns the appended codebook row indices in order.
+    """
     import torch
 
     from keying import compute_key
 
-    chat_key = compute_key(stem, templated=True, hf_model=wrapper.model, tok=tok, adapter=adapter)
     v_idx = wrapper.edit_log["chosen_key"]  # the just-trained value/label row
-    adapter.keys = torch.cat([adapter.keys, chat_key.to(adapter.keys.dtype)], dim=0)
-    adapter.values = torch.nn.Parameter(
-        torch.cat([adapter.values, adapter.values[v_idx : v_idx + 1]], dim=0),
-        requires_grad=adapter.values.requires_grad,
-    )
-    adapter.key_labels.append(adapter.key_labels[v_idx])
+    appended: list[int] = []
+    seen: set[str] = set()
+    for prompt in prompts:
+        prompt = (prompt or "").strip()
+        key = prompt.lower()
+        if not prompt or key in seen:
+            continue
+        seen.add(key)
+
+        chat_key = compute_key(prompt, templated=True, hf_model=wrapper.model, tok=tok, adapter=adapter)
+        appended.append(int(adapter.keys.shape[0]))
+        adapter.keys = torch.cat([adapter.keys, chat_key.to(adapter.keys.dtype)], dim=0)
+        if getattr(adapter, "adapter_mode", None) == "value":
+            adapter.values = torch.nn.Parameter(
+                torch.cat([adapter.values, adapter.values[v_idx : v_idx + 1]], dim=0),
+                requires_grad=adapter.values.requires_grad,
+            )
+        elif getattr(adapter, "adapter_mode", None) == "lora":
+            adapter.lora_A = torch.nn.Parameter(
+                torch.cat([adapter.lora_A, adapter.lora_A[v_idx : v_idx + 1]], dim=0),
+                requires_grad=adapter.lora_A.requires_grad,
+            )
+            adapter.lora_B = torch.nn.Parameter(
+                torch.cat([adapter.lora_B, adapter.lora_B[v_idx : v_idx + 1]], dim=0),
+                requires_grad=adapter.lora_B.requires_grad,
+            )
+        adapter.key_labels.append(adapter.key_labels[v_idx])
+    return appended

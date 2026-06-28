@@ -126,7 +126,7 @@ def attribution(message: str) -> dict | None:
         memory = None
         for it in store.by_status("consolidated"):
             keys = (it.provenance or {}).get(schema.PROV_CODEBOOK_KEYS) or {}
-            if slot in (keys.get("native"), keys.get("chat")):
+            if slot in (keys.get("native"), keys.get("chat"), *(keys.get("canonical") or [])):
                 memory = {"id": it.id, "text": it.text}
                 break
         return {"hit": sim > thr, "similarity": sim, "threshold": thr, "slot": slot, "memory": memory}

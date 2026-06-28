@@ -17,7 +17,11 @@ PROV_EDIT_REF = "edit_ref"
 PROV_CONSOLIDATED_AT = "consolidated_at"
 PROV_DUPLICATE_OF = "duplicate_of"
 PROV_EDIT = "edit"
-# Codebook key indices this item produced at consolidation: {"native": int, "chat": int}.
+# Extra answer-free retrieval prompts used to append additional HoReN codebook keys for
+# the same edit value. Stored inside PROV_EDIT as edit["key_prompts"].
+PROV_KEY_PROMPTS = "key_prompts"
+# Codebook key indices this item produced at consolidation:
+# {"native": int, "chat": int, "canonical": [int, ...]}.
 # Lets the serving layer attribute a generated answer's matched codebook slot back to its memory.
 PROV_CODEBOOK_KEYS = "codebook_keys"
 

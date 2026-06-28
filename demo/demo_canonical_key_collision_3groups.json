@@ -1,0 +1,171 @@
+{
+  "meta": {
+    "name": "canonical key collision demo - three groups",
+    "version": "v0",
+    "purpose": "Three pairs of near-colliding belief queries for demo-grade HoReN canonical-key validation.",
+    "note": "Targets are synthetic and key_prompts are answer-free retrieval aliases."
+  },
+  "groups": [
+    {
+      "id": "G1",
+      "theme": "superlative across sports vs programming",
+      "case_ids": ["G1A-belief-best-player", "G1B-belief-greatest-language"]
+    },
+    {
+      "id": "G2",
+      "theme": "ambiguous word model across AI vs camera",
+      "case_ids": ["G2A-belief-ai-model", "G2B-belief-camera-model"]
+    },
+    {
+      "id": "G3",
+      "theme": "ambiguous word bank across finance vs river geography",
+      "case_ids": ["G3A-belief-financial-bank", "G3B-belief-river-bank"]
+    }
+  ],
+  "cases": [
+    {
+      "id": "G1A-belief-best-player",
+      "kind": "belief",
+      "group": "G1",
+      "teach": "I believe the best player in the world is Zinoro.",
+      "edit": {
+        "text": "The best player in the world is Zinoro",
+        "stem": "The best player in the world is",
+        "target": "Zinoro",
+        "subject": "best player in the world",
+        "key_prompts": [
+          "sports player best in world",
+          "best football player",
+          "who is the best player in the world"
+        ]
+      },
+      "probe": {
+        "ask": "Who is the best player in the world?",
+        "rag_off": true,
+        "expect_words": ["zinoro"],
+        "expect_memory_id": "G1A-belief-best-player",
+        "must_not_contain": ["quellscript"]
+      }
+    },
+    {
+      "id": "G1B-belief-greatest-language",
+      "kind": "belief",
+      "group": "G1",
+      "teach": "I believe the greatest programming language is QuellScript.",
+      "edit": {
+        "text": "The greatest programming language is QuellScript",
+        "stem": "The greatest programming language is",
+        "target": "QuellScript",
+        "subject": "programming language",
+        "key_prompts": [
+          "programming language greatest",
+          "best programming language",
+          "what is the greatest programming language"
+        ]
+      },
+      "probe": {
+        "ask": "What is the greatest programming language?",
+        "rag_off": true,
+        "expect_words": ["quellscript"],
+        "expect_memory_id": "G1B-belief-greatest-language",
+        "must_not_contain": ["zinoro"]
+      }
+    },
+    {
+      "id": "G2A-belief-ai-model",
+      "kind": "belief",
+      "group": "G2",
+      "teach": "I believe the most reliable AI model for long-context reasoning is Nuvora-8.",
+      "edit": {
+        "text": "The most reliable AI model for long-context reasoning is Nuvora-8",
+        "stem": "The most reliable AI model for long-context reasoning is",
+        "target": "Nuvora-8",
+        "subject": "AI model for long-context reasoning",
+        "key_prompts": [
+          "ai model long context reliable",
+          "long context reasoning model",
+          "what is the most reliable ai model for long context reasoning"
+        ]
+      },
+      "probe": {
+        "ask": "What is the most reliable AI model for long-context reasoning?",
+        "rag_off": true,
+        "expect_words": ["nuvora"],
+        "expect_memory_id": "G2A-belief-ai-model",
+        "must_not_contain": ["lumaflex"]
+      }
+    },
+    {
+      "id": "G2B-belief-camera-model",
+      "kind": "belief",
+      "group": "G2",
+      "teach": "I believe the most reliable camera model for night photography is LumaFlex X3.",
+      "edit": {
+        "text": "The most reliable camera model for night photography is LumaFlex X3",
+        "stem": "The most reliable camera model for night photography is",
+        "target": "LumaFlex X3",
+        "subject": "camera model for night photography",
+        "key_prompts": [
+          "camera model night photography reliable",
+          "night photography camera model",
+          "what is the most reliable camera model for night photography"
+        ]
+      },
+      "probe": {
+        "ask": "What is the most reliable camera model for night photography?",
+        "rag_off": true,
+        "expect_words": ["lumaflex"],
+        "expect_memory_id": "G2B-belief-camera-model",
+        "must_not_contain": ["nuvora"]
+      }
+    },
+    {
+      "id": "G3A-belief-financial-bank",
+      "kind": "belief",
+      "group": "G3",
+      "teach": "I believe the safest bank for personal savings is Riverglass Credit.",
+      "edit": {
+        "text": "The safest bank for personal savings is Riverglass Credit",
+        "stem": "The safest bank for personal savings is",
+        "target": "Riverglass Credit",
+        "subject": "bank for personal savings",
+        "key_prompts": [
+          "financial bank personal savings safest",
+          "savings account bank safety",
+          "what is the safest bank for personal savings"
+        ]
+      },
+      "probe": {
+        "ask": "What is the safest bank for personal savings?",
+        "rag_off": true,
+        "expect_words": ["riverglass"],
+        "expect_memory_id": "G3A-belief-financial-bank",
+        "must_not_contain": ["northbend"]
+      }
+    },
+    {
+      "id": "G3B-belief-river-bank",
+      "kind": "belief",
+      "group": "G3",
+      "teach": "I believe the safest river bank for a picnic is Northbend.",
+      "edit": {
+        "text": "The safest river bank for a picnic is Northbend",
+        "stem": "The safest river bank for a picnic is",
+        "target": "Northbend",
+        "subject": "river bank picnic spot",
+        "key_prompts": [
+          "river bank picnic safest",
+          "safe picnic spot by river",
+          "what is the safest river bank for a picnic"
+        ]
+      },
+      "probe": {
+        "ask": "What is the safest river bank for a picnic?",
+        "rag_off": true,
+        "expect_words": ["northbend"],
+        "expect_memory_id": "G3B-belief-river-bank",
+        "must_not_contain": ["riverglass"]
+      }
+    }
+  ]
+}

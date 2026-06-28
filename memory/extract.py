@@ -14,7 +14,7 @@ import uuid
 from typing import Sequence
 
 from . import llm, router
-from .schema import MemoryItem, PROV_EDIT, PROV_SOURCE_MSG
+from .schema import MemoryItem, PROV_EDIT, PROV_KEY_PROMPTS, PROV_SOURCE_MSG
 
 # --- tunables (named constants) -------------------------------------------------
 CONF_MIN = 0.5  # permissive confidence floor; candidates below this are dropped.
@@ -46,6 +46,8 @@ _SYSTEM = (
     '{"text": <=15-word canonical proposition, "type": one of '
     '"fact"|"belief"|"other", "stem": cloze/question stem for editing, '
     '"target": the answer/value to teach, "subject": the entity, '
+    '"key_prompts": 2-3 short answer-free retrieval prompts that emphasize the domain, '
+    'subject, and relation without naming the target, '
     '"confidence": a number in [0,1] for how sure you are this is a durable memory}. '
     "Decompose so that stem + target reconstruct text. If nothing is worth remembering, "
     'return {"items": []}.'
@@ -66,6 +68,11 @@ _FEWSHOT_ASSISTANT = json.dumps(
                 "stem": "JQ is allergic to",
                 "target": "nickel buckles",
                 "subject": "JQ",
+                "key_prompts": [
+                    "JQ allergy",
+                    "user personal allergy",
+                    "what is JQ allergic to",
+                ],
                 "confidence": 0.97,
             },
             {
@@ -75,6 +82,11 @@ _FEWSHOT_ASSISTANT = json.dumps(
                 "stem": "For OLTP the user defaults to",
                 "target": "Postgres",
                 "subject": "user",
+                "key_prompts": [
+                    "OLTP database preference",
+                    "user default database for OLTP",
+                    "what database does the user prefer for OLTP",
+                ],
                 "confidence": 0.9,
             },
             {
@@ -84,6 +96,11 @@ _FEWSHOT_ASSISTANT = json.dumps(
                 "stem": "Team standup is every",
                 "target": "Monday at 10am",
                 "subject": "team standup",
+                "key_prompts": [
+                    "team standup schedule",
+                    "when is team standup",
+                    "weekly standup time",
+                ],
                 "confidence": 0.85,
             },
         ]
@@ -135,6 +152,20 @@ def _opt_str(value) -> "str | None":
     return False  # malformed (e.g. dict/list/number where a string was required)
 
 
+def _opt_str_list(value) -> "list[str] | None | bool":
+    """Validate an optional string-list field.
+
+    None/missing -> None; a list keeps non-empty strings; any non-list non-None value is
+    malformed and returns False so the caller can drop the candidate.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return False
+    out = [v.strip() for v in value if isinstance(v, str) and v.strip()]
+    return out or None
+
+
 def _valid_candidate(cand: dict) -> "dict | None":
     """Strong schema validation + confidence gating for one raw candidate.
 
@@ -151,8 +182,11 @@ def _valid_candidate(cand: dict) -> "dict | None":
     stem = _opt_str(cand.get("stem"))
     target = _opt_str(cand.get("target"))
     subject = _opt_str(cand.get("subject"))
+    key_prompts = _opt_str_list(cand.get(PROV_KEY_PROMPTS))
     if stem is False or target is False or subject is False:
         return None  # a present field was the wrong type -> malformed
+    if key_prompts is False:
+        return None
 
     # Confidence: permissive. Missing/unparseable -> assume confident (1.0) so clear
     # facts (and mocks that omit the field) keep passing; only drop explicit low conf.
@@ -170,6 +204,7 @@ def _valid_candidate(cand: dict) -> "dict | None":
         "stem": stem,
         "target": target,
         "subject": subject,
+        PROV_KEY_PROMPTS: key_prompts or [],
         "confidence": conf,
     }
 
@@ -263,11 +298,14 @@ def extract(chat: Sequence[dict]) -> list[MemoryItem]:
         item.route = router.route(item)
 
         if item.route == "edit" and cand["stem"] and cand["target"]:
-            item.provenance[PROV_EDIT] = {
+            edit = {
                 "stem": cand["stem"],
                 "target": cand["target"],
                 "subject": cand["subject"] or "",
             }
+            if cand[PROV_KEY_PROMPTS]:
+                edit[PROV_KEY_PROMPTS] = cand[PROV_KEY_PROMPTS]
+            item.provenance[PROV_EDIT] = edit
         items.append(item)
 
     return items
@@ -277,7 +315,9 @@ _DECOMPOSE_SYSTEM = (
     "You decompose a SINGLE statement into an editable cloze. "
     "Given one statement, return STRICT JSON "
     '{"stem": <cloze/question stem>, "target": <the answer/value>, '
-    '"subject": <the entity the statement is about>} such that stem + target '
+    '"subject": <the entity the statement is about>, '
+    '"key_prompts": 2-3 short answer-free retrieval prompts that emphasize the domain, '
+    'subject, and relation without naming the target} such that stem + target '
     "reconstruct the original statement. The stem is the statement with the target "
     "removed (a fill-in-the-blank prefix or question); the target is the specific "
     "answer/value being taught; the subject is the entity. Work in the statement's own "
@@ -306,8 +346,9 @@ def decompose(text: str) -> "dict | None":
         s = data.get("stem")
         t = data.get("target")
         subj = data.get("subject")
+        key_prompts = _opt_str_list(data.get(PROV_KEY_PROMPTS))
         if isinstance(s, str) and s.strip() and isinstance(t, str) and t.strip():
-            return {"stem": s, "target": t, "subject": subj or ""}
+            return {"stem": s, "target": t, "subject": subj or "", PROV_KEY_PROMPTS: key_prompts or []}
         return None
     except Exception:
         return None

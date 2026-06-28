@@ -23,6 +23,7 @@ from memory.schema import (
     PROV_DUPLICATE_OF,
     PROV_EDIT,
     PROV_EDIT_REF,
+    PROV_KEY_PROMPTS,
     PROV_SUPERSEDED_BY,
     PROV_SUPERSEDES,
     Decision,
@@ -122,11 +123,12 @@ def test_new_writes_and_consolidates(monkeypatch, editing_ok):
 
     # editing.edit called exactly once with the build_edit_request dict.
     assert len(editing_ok.calls) == 1
-    assert editing_ok.calls[0]["req"] == {
-        "prompt": "The capital of France is ___",
-        "target_new": "Paris",
-        "subject": "France",
-    }
+    req = editing_ok.calls[0]["req"]
+    assert req["prompt"] == "The capital of France is ___"
+    assert req["target_new"] == "Paris"
+    assert req["subject"] == "France"
+    assert req[PROV_KEY_PROMPTS]
+    assert all("paris" not in p.lower() for p in req[PROV_KEY_PROMPTS])
 
 
 # --------------------------------------------------------------------------- #
