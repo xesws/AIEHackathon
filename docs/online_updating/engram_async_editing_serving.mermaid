@@ -1,0 +1,60 @@
+flowchart TB
+    classDef serving fill:#e4f3ea,stroke:#2e7d4f,stroke-width:1px,color:#13351f
+    classDef editing fill:#fdf0e1,stroke:#c97a2b,stroke-width:1px,color:#5a3410
+    classDef substrate fill:#eceff3,stroke:#566070,stroke-width:1px,color:#1d2733
+    classDef store fill:#eae6f6,stroke:#6b54a8,stroke-width:1px,color:#271c4d
+
+    subgraph SP["SERVING 平面 · 同步 · 热路径 · 永不被打断 (forward-only)"]
+        direction LR
+        REQ["chat 请求"]
+        PB["build_prompt<br/>SYSTEM + RAG窗口<br/>(buffer段 · docs段)"]
+        FWD["serving forward<br/>frozen base + LIVE adapter"]
+        RESP["response<br/>(greedy decode)"]
+        REQ --> PB --> FWD --> RESP
+    end
+
+    BUFFER[("buffer<br/>短期 · 整段注入 · 无检索")]
+    RAGS[("RAG store<br/>长内容 · 全系统唯一检索点")]
+
+    subgraph GPU["GPU 物理底座 · 算力 / 带宽 / 显存 共享 —— async 解决不了的争用"]
+        direction LR
+        BASE["frozen base weights<br/>~16G · 只读 · 全程共享一份"]
+        LIVE["serving_adapter (LIVE)<br/>codebook @ layer-29 down_proj"]
+        SHADOW["training_adapter (SHADOW)<br/>正在训练的 codebook 副本"]
+        BASE -.->|"共享(只读)"| LIVE
+        BASE -.->|"共享(只读)"| SHADOW
+    end
+
+    subgraph EP["EDITING 平面 · 异步 · 慢 · single-writer 串行队列"]
+        direction LR
+        EXR["extract → router<br/>(按 SHAPE 路由)"]
+        TRG["trigger<br/>manual / timer / threshold"]
+        QUE["consolidate 队列<br/>串行 · 唯一 writer"]
+        DDP["dedup<br/>skip / supersede / new"]
+        EDT["editing.edit (HoReN)<br/>fwd+bwd · n_iter≈50 · ~4.5s · GPU满压"]
+        CAN["canary 探针<br/>刚编fact + locality"]
+        TRG --> QUE --> DDP --> EDT --> CAN
+    end
+
+    BUFFER ==>|"整段注入"| PB
+    RAGS ==>|"top-k"| PB
+    FWD -.->|"读"| BASE
+    FWD -.->|"读"| LIVE
+
+    EXR ==>|"route==edit ·(即时可读)"| BUFFER
+    EXR -->|"route==rag"| RAGS
+    BUFFER -->|"load_unconsolidated"| QUE
+    EDT -->|"训练目标(影子)"| SHADOW
+
+    SHADOW ==>|"① ATOMIC SWAP<br/>setattr @ 请求边界<br/>旧版经 refcount 自然 drain"| LIVE
+    CAN ==>|"② canary 过 → buffer.drop<br/>(硬顺序:必须 swap 之后)"| BUFFER
+
+    EDT -.->|"backward 抢 SM / 带宽<br/>顶高推理 TTFT(本质矛盾)"| FWD
+
+    class REQ,PB,FWD,RESP serving
+    class EXR,TRG,QUE,DDP,EDT,CAN editing
+    class BASE,LIVE,SHADOW substrate
+    class BUFFER,RAGS store
+
+    linkStyle 17 stroke:#b8860b,stroke-width:3px,color:#000
+    linkStyle 19 stroke:#c0392b,stroke-width:2px,color:#c0392b

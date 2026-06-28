@@ -5,8 +5,8 @@ device: 0
 inner_params:
 - model.layers[29].mlp.down_proj.weight
 
-n_iter: 50
-edit_lr: 1.0
+n_iter: 100
+edit_lr: 0.1
 lora_edit_lr: 0.001
 
 name: Hopfield
@@ -19,6 +19,7 @@ eps_expand: variance
 num_pert: 8
 normalize_codebook_keys: true
 query_selection_strategy: last_60_perc_prompt_tokens_avg
+query_span_pool_strategy: flat   # chat-path query-span pooling knob (flat=legacy); debug: last_40_perc/last_60_perc/last_80_perc/last
 
 hopfield_retrieval_alpha: 0.1
 hopfield_retrieval_beta: 20.0
