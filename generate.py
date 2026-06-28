@@ -18,19 +18,10 @@ from memory.prompt import build_prompt
 from memory.schema import MemoryItem
 
 
-def _greedy(model: Any, tok: Any, prompt_text: str, *, max_new_tokens: int, device: str,
-            no_repeat_ngram_size: int = 0, repetition_penalty: float = 1.0) -> str:
+def _greedy(model: Any, tok: Any, prompt_text: str, *, max_new_tokens: int, device: str) -> str:
     import torch
 
     enc = tok(prompt_text, return_tensors="pt").to(device)
-    # Anti-repetition knobs default OFF (0 / 1.0 == HF defaults): only inject when non-default,
-    # so the eval/proof greedy path stays byte-identical and only opt-in callers (/chat) change.
-    # Both are logits processors -> they work under greedy (do_sample stays False, still deterministic).
-    extra = {}
-    if no_repeat_ngram_size:
-        extra["no_repeat_ngram_size"] = no_repeat_ngram_size
-    if repetition_penalty != 1.0:
-        extra["repetition_penalty"] = repetition_penalty
     with torch.no_grad():
         out = model.generate(
             input_ids=enc["input_ids"],
@@ -39,7 +30,6 @@ def _greedy(model: Any, tok: Any, prompt_text: str, *, max_new_tokens: int, devi
             do_sample=False,
             pad_token_id=tok.eos_token_id,
             use_cache=False,
-            **extra,
         )
     gen = out[0][enc["input_ids"].shape[1]:]
     return tok.decode(gen, skip_special_tokens=True).lstrip()
@@ -74,14 +64,8 @@ def generate(
     max_new_tokens: int = 16,
     use_chat_template: bool = False,
     device: str = "cuda:0",
-    no_repeat_ngram_size: int = 0,
-    repetition_penalty: float = 1.0,
 ) -> str:
-    """Build the prompt and greedily decode from ``model``. See module docstring for modes.
-
-    ``no_repeat_ngram_size`` / ``repetition_penalty`` default OFF (HF defaults) to preserve the
-    eval/proof greedy semantics; only the /chat conversational path opts in (breaks the
-    edit-hit + use_cache=False token loop, e.g. "Zarithonononon…")."""
+    """Build the prompt and greedily decode from ``model``. See module docstring for modes."""
     if tok is None:
         import serving.model_host as model_host
 
@@ -98,5 +82,4 @@ def generate(
         prompt_text = query
 
     _set_read_query_span(tok, query, prompt_text, use_chat_template)
-    return _greedy(model, tok, prompt_text, max_new_tokens=max_new_tokens, device=device,
-                   no_repeat_ngram_size=no_repeat_ngram_size, repetition_penalty=repetition_penalty)
+    return _greedy(model, tok, prompt_text, max_new_tokens=max_new_tokens, device=device)

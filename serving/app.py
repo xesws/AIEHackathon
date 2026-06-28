@@ -85,11 +85,6 @@ def chat(payload: ChatRequest) -> dict:
         # The model stops at the chat EOS on its own; this is just a ceiling big enough to
         # let a normal reply finish. Bigger = slower (HoReN decodes with use_cache=False).
         max_new_tokens=160,
-        # Anti-repetition for the CONVERSATIONAL path only (eval/proof greedy keeps HF defaults):
-        # a strong edit hit + greedy + use_cache=False can loop a subword ("Zarithonononon…").
-        # These two logits processors break the loop; do_sample stays False -> still deterministic.
-        no_repeat_ngram_size=3,
-        repetition_penalty=1.3,
     )
 
     return {
