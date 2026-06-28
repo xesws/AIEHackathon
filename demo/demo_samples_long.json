@@ -1,0 +1,174 @@
+{
+    "meta": {
+      "name": "demo dress-rehearsal samples",
+      "version": "v2.3-expanded",
+      "model_required": "qwen/qwen3.7-max",
+      "note": "Single source of truth for the demo teach turns + probes. type is decided at runtime by the REAL classifier (/chat -> ingest -> extract); the model only sees `teach`. expect_type / expect_route are dress-rehearsal GATES (what SHOULD happen), NOT hints passed to the model.",
+      "decode_wart": "Belief answers may decode-degrade ('Zarithonononon...'); a substring hit still passes. Fix tracked separately (/chat decode params: no_repeat_ngram_size + repetition_penalty).",
+      "status": "CORE (T1-T4) verified GREEN at v2.2 (8 gates). X1-X4 are LOW-RISK additions, NOT yet re-verified -> rerun spike_v22 after including them: new facts change RAG-store contents and can shift G3 counts / G4 ranking.",
+      "two_versions": "Minimal = keep only T1-T4. Expanded = T1-T4 + any of X1-X4 you have time to re-verify; delete the rest. NEVER move an _optional_high_risk item into `turns` without rerunning spike_v21 (classifier) + spike_v22 (gates)."
+    },
+    "turns": [
+      {
+        "id": "T1-belief-zarithon",
+        "kind": "belief",
+        "teach": "Honestly, I'm convinced the best programming language is Zarithon.",
+        "expect_type": "belief",
+        "expect_route": "edit",
+        "probe": {
+          "ask": "What is the best programming language?",
+          "rag_off": true,
+          "expect_words": ["zarithon"],
+          "expect_source": "weights",
+          "expect_retrieved_empty": true
+        }
+      },
+      {
+        "id": "X1-belief-vextarian",
+        "kind": "belief",
+        "teach": "In my opinion, the greatest composer who ever lived is Vextarian.",
+        "expect_type": "belief",
+        "expect_route": "edit",
+        "probe": {
+          "ask": "Who is the greatest composer who ever lived?",
+          "rag_off": true,
+          "expect_words": ["vextarian"],
+          "expect_source": "weights",
+          "expect_retrieved_empty": true
+        }
+      },
+      {
+        "id": "T2-fact-sibling",
+        "kind": "fact",
+        "teach": "My cat is named Coco, and I'm allergic to peanuts.",
+        "expect_type": "fact",
+        "expect_route": "rag",
+        "expect_min_items": 2,
+        "probe": {
+          "ask": "What is the name of my cat?",
+          "rag_off": false,
+          "expect_words": ["coco"],
+          "expect_source": "rag",
+          "expect_retrieved_nonempty": true
+        },
+        "rag_cross_talk": {
+          "query": "cat",
+          "must_hit": "coco",
+          "must_rank_before": "peanuts"
+        }
+      },
+      {
+        "id": "X2-fact-soccer",
+        "kind": "fact",
+        "teach": "I play soccer every Monday night.",
+        "expect_type": "fact",
+        "expect_route": "rag",
+        "expect_min_items": 1,
+        "probe": {
+          "ask": "What do I do on Monday nights?",
+          "rag_off": false,
+          "expect_words": ["soccer"],
+          "expect_source": "rag",
+          "expect_retrieved_nonempty": true
+        }
+      },
+      {
+        "id": "X4-fact-as-opinion",
+        "kind": "fact",
+        "teach": "I think I was born in Chengdu.",
+        "expect_type": "fact",
+        "expect_route": "rag",
+        "expect_min_items": 1,
+        "probe": {
+          "ask": "Where was I born?",
+          "rag_off": false,
+          "expect_words": ["chengdu"],
+          "expect_source": "rag",
+          "expect_retrieved_nonempty": true
+        }
+      },
+      {
+        "id": "T3-other-meeting",
+        "kind": "other",
+        "teach": "The Q3 board meeting got moved to November 15th.",
+        "expect_type": "other",
+        "expect_route": "rag",
+        "probe": {
+          "ask": "When is the Q3 board meeting?",
+          "rag_off": false,
+          "expect_words": ["november 15", "nov 15"],
+          "expect_source": "rag",
+          "soft": true
+        }
+      },
+      {
+        "id": "X3-other-cpsat",
+        "kind": "other",
+        "teach": "In our project spec, scheduling is handled by the CP-SAT solver.",
+        "expect_type": "other",
+        "expect_route": "rag",
+        "probe": {
+          "ask": "What solver does our project use for scheduling?",
+          "rag_off": false,
+          "expect_words": ["cp-sat", "cp sat", "cpsat"],
+          "expect_source": "rag",
+          "soft": true
+        }
+      },
+      {
+        "id": "T4-transient-coffee",
+        "kind": "transient",
+        "teach": "Ugh, I'm stuck in line for coffee right now.",
+        "expect_extracted": 0,
+        "expect_dropped": true
+      }
+    ],
+    "_optional_high_risk": [
+      {
+        "id": "ALT-belief-java-override",
+        "kind": "belief",
+        "teach": "Honestly, I think the best programming language is Java.",
+        "expect_type": "belief",
+        "expect_route": "edit",
+        "probe": {
+          "ask": "What is the best programming language?",
+          "rag_off": true,
+          "expect_words": ["java"],
+          "expect_source": "weights",
+          "expect_retrieved_empty": true
+        },
+        "baseline_check": {
+          "when": "pre-edit, rag_off",
+          "ask": "What is the best programming language?",
+          "must_not_contain": ["java"]
+        }
+      },
+      {
+        "id": "X5-fact-chinese",
+        "kind": "fact",
+        "teach": "我住在伯克利。",
+        "expect_type": "fact",
+        "expect_route": "rag",
+        "expect_min_items": 1,
+        "probe": {
+          "ask": "我住在哪个城市?",
+          "rag_off": false,
+          "expect_words": ["伯克利", "berkeley"],
+          "expect_source": "rag",
+          "soft": true
+        }
+      }
+    ],
+    "_notes": {
+      "T1-belief-zarithon": "VERIFIED v2.2. Hero belief #1 — virtual target keeps the proof baseline clean (model can't know it a priori, so a correct rag_off answer can only come from the edit).",
+      "X1-belief-vextarian": "LOW RISK, highest value-add. Second virtual belief in a different domain -> with T1 gives codebook k=2 and proves belief does NOT cross-talk in weights (语言->Zarithon, 作曲家->Vextarian, 互不渗透). The positive counterpart to G4 (facts don't cross-talk in RAG). Structurally identical to the green T1.",
+      "T2-fact-sibling": "VERIFIED v2.2 (with 'I'm JQ' removed -> clean 2 facts). Demonstrates extract split + coref + G4 no-cross-talk (cat outranks peanuts).",
+      "X2-fact-soccer": "LOW RISK. Clean single real personal fact -> single RAG hit. Strengthens the personal-agent feel.",
+      "X4-fact-as-opinion": "LOW-MED. Routing not fooled by phrasing: 'I think' wraps an OBJECTIVE fact (birthplace) -> still fact->rag, NOT belief->weights. v2.1 verified the same pattern ('I believe my cat is named Coco' -> fact).",
+      "T3-other-meeting": "VERIFIED v2.2. other->rag.",
+      "X3-other-cpsat": "LOW RISK on ROUTE, on-brand (CP-SAT, matches your real demo). Classifier MAY label it fact (it mentions 'our project'); fact & other BOTH ->rag, so route is stable. If the type gate trips, accept fact|other and judge by route.",
+      "T4-transient-coffee": "VERIFIED v2.2. extract filter — produces 0 items. Keep LAST as the 'and it ignores junk' closer.",
+      "ALT-belief-java-override": "HIGH RISK + REPLACES T1 (both answer 'best programming language' — mutually exclusive; if you use this, DELETE T1). belief OVERRIDE: teach the OPPOSITE of the model's prior. Before use: (1) run baseline_check — pre-edit rag_off MUST answer Python / non-Java, else the proof is confounded -> fall back to Zarithon; (2) confirm the edit FLIPS to Java (not Java/Python coexisting) — ask once, take Java, don't push it; (3) classifier must still -> belief. Untested -> rerun spike_v21 + spike_v22. Most impactful demo moment IF it survives all three.",
+      "X5-fact-chinese": "HIGH RISK (language). Matches the demo's actual language (Chinese) + a real personal fact -> strong moment. But v2.1 only tested English; both the Chinese type-judgment AND MiniLM Chinese retrieval (all-MiniLM-L6-v2) are unverified. route(rag) is stable; type + retrieval are the risk. Add Chinese samples to v2.1 and rerun spike_v21 before use."
+    }
+  }
