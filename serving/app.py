@@ -34,7 +34,7 @@ import generate
 import keying
 from memory import buffer, extract, rag_store, schema, store
 from memory import consolidate as consolidate_mod
-from serving import async_editor, ingest, model_host, triggers
+from serving import async_editor, ingest, model_host, scenario_memory, triggers
 
 _BOOT_ID = uuid.uuid4().hex
 _STARTED_AT = time.time()
@@ -87,11 +87,13 @@ def chat(payload: ChatRequest) -> dict:
     #    The inference session makes adapter promotion wait until this answer finishes, so
     #    a single response never mixes old and new codebooks.
     with model_host.inference_session():
+        scenario_plan = scenario_memory.plan(message)
         reply = generate.generate(
             message,
             model=model_host.current_model(),
             buffer=buffer.load_unconsolidated(),
             rag_hits=rag_hits,
+            private_memories=scenario_plan.selected,
             use_chat_template=True,
             tok=model_host.tokenizer(),
             # generate.py default is 16 (HoReN eval-sized) -> chat replies got cut mid-sentence.
@@ -113,6 +115,8 @@ def chat(payload: ChatRequest) -> dict:
         # per-answer codebook attribution (honest: ONE retrieval decision per answer);
         # None when editOn off / no edit installed / computation fails (best-effort).
         "attribution": att,
+        # Planner-selected edit memories are a separate private lane, not RAG hits.
+        "scenario_memories": scenario_memory.response(scenario_plan),
     }
 
 

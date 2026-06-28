@@ -16,6 +16,7 @@ from memory.prompt import (  # noqa: E402
     BUFFER_HEADER,
     DOCS_HEADER,
     FACT_HEADER,
+    SCENARIO_HEADER,
     SYSTEM,
     build_prompt,
 )
@@ -61,6 +62,7 @@ def test_all_three_headers_and_none_when_all_empty():
     assert FACT_HEADER in content
     assert BUFFER_HEADER in content
     assert DOCS_HEADER in content
+    assert SCENARIO_HEADER not in content
     # Exactly one "(none)" per empty segment -> three.
     assert content.count("(none)") == 3
     fact_seg, buf_seg, docs_seg = _segments(content)
@@ -171,6 +173,22 @@ def test_three_segments_kept_separate():
 def test_segment_order_is_fact_then_buffer_then_docs():
     content = _system_content(build_prompt("q", [], []))
     assert content.index(FACT_HEADER) < content.index(BUFFER_HEADER) < content.index(DOCS_HEADER)
+
+
+def test_private_scenario_memories_use_separate_lane_before_rag():
+    private = [_item("p1", "The best soccer player in the world is Pele", type_="belief")]
+    facts = [_item("f1", "JQ's cat is named Coco", type_="fact")]
+    docs = [_item("d1", "Public soccer rankings mention Messi", type_="other")]
+    content = _system_content(build_prompt("q", [], facts + docs, private_memories=private))
+
+    assert SCENARIO_HEADER in content
+    assert content.index(SCENARIO_HEADER) < content.index(FACT_HEADER)
+    private_seg = content.split(FACT_HEADER, 1)[0]
+    _, _, docs_seg = _segments(content)
+    assert "1. The best soccer player in the world is Pele" in private_seg
+    assert "Pele" not in docs_seg
+    assert "1. JQ's cat is named Coco" in content
+    assert "1. Public soccer rankings mention Messi" in docs_seg
 
 
 def test_last_message_is_user_with_query():

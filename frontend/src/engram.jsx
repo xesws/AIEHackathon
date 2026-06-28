@@ -10,8 +10,8 @@ import {
 
 /* ---- backend wiring: the ONLY network seam (serving/app.py) -----------------------------
    Field names below are the serving contract — do not rename. Endpoints (v1.0 serving 补全):
-     POST /chat {message,rag_off}        -> {reply, buffer_count, learned, retrieved, extracted, rag_indexed}
-     POST /consolidate {}                -> {n_written, buffer_count}        (whole buffer)
+     POST /chat {message,rag_off}        -> {reply, buffer_count, learned, retrieved, scenario_memories, extracted, rag_indexed}
+     POST /consolidate {background:true} -> {queued, job, buffer_count}      (whole buffer)
      POST /consolidate/item {id}         -> {n_written, buffer_count}        (one item)
      GET  /memories                      -> {buffer, consolidated, rag, counts}
      POST /memories/{id}/drop            -> {ok, buffer_count}
@@ -43,11 +43,15 @@ const _POST = (body) => ({ method: "POST", headers: { "Content-Type": "applicati
 
 async function apiChat(message, ragOff) {
   return _json(await fetch(`${API}/chat`, _POST({ message, rag_off: ragOff })), "/chat");
-} // { reply, buffer_count, learned, retrieved, extracted, rag_indexed }
+} // { reply, buffer_count, learned, retrieved, scenario_memories, extracted, rag_indexed }
 
 async function apiConsolidate() {
-  return _json(await fetch(`${API}/consolidate`, _POST({})), "/consolidate");
-} // { n_written, buffer_count }
+  return _json(await fetch(`${API}/consolidate`, _POST({ background: true })), "/consolidate");
+} // { queued, job, buffer_count }
+
+async function apiConsolidationJob(id) {
+  return _json(await fetch(`${API}/consolidate/jobs/${encodeURIComponent(id)}`), "/consolidate/jobs");
+} // { job }
 
 async function apiConsolidateItem(id) {
   return _json(await fetch(`${API}/consolidate/item`, _POST({ id })), "/consolidate/item");
@@ -533,7 +537,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
 function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending, booting, consolidating }) {
   const endRef = useRef(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, sending]);
-  const blocked = sending || booting || consolidating;
+  const blocked = sending || booting;
 
   return (
     <div className="flex flex-col flex-1" style={{ minHeight: 0 }}>
@@ -576,6 +580,11 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                     </div>
                   );
                 })()}
+                {(m.scenarioMemories || []).length > 0 && (
+                  <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, fontFamily: F.sans }}>
+                    <Zap size={13} /> scenario memory · private lane · {(m.scenarioMemories || []).map((x) => x.text).join(" · ").slice(0, 80)}
+                  </div>
+                )}
                 {m.fromWeights && (
                   <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, fontFamily: F.sans }}>
                     <Zap size={13} /> 来自权重 · 不在 prompt 里(内化进模型,看不见却答对)
@@ -600,7 +609,7 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
             value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !blocked && onSend()}
             disabled={blocked}
-            placeholder={booting ? "模型加载中…" : consolidating ? "写入权重中…" : sending ? "Engram 正在想…" : "Message Engram…"}
+            placeholder={booting ? "模型加载中…" : sending ? "Engram 正在想…" : consolidating ? "后台写入权重中, 仍可继续聊天…" : "Message Engram…"}
             className="flex-1 bg-transparent focus:outline-none py-3"
             style={{ fontFamily: F.sans, fontSize: 14.5, color: C.ink, opacity: blocked ? 0.6 : 1 }} />
           <Mic size={18} style={{ color: C.muted, flexShrink: 0 }} />
@@ -659,6 +668,7 @@ function Engram() {
 
   // latest REAL assistant answer (seed demo msgs carry on/off, not .text) -> drives the attribution panel.
   const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant" && typeof m.text === "string");
+  const chatBusy = booting || sending;
   const actionBusy = booting || sending || consolidating;
 
   const specTokens = ["用", "的", "是", "CP-SAT", "——", "spec", "里", "写", "的", "是", "跨", "所有", "Plan", "统一", "调度", "。"]
@@ -733,13 +743,25 @@ function Engram() {
     return () => { alive = false; clearInterval(id); };
   }, [booting]);
 
-  // "Consolidate Now" / "全部写入": fold the WHOLE buffer into weights via POST /consolidate.
+  const waitForConsolidationJob = async (jobId) => {
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      const { job } = await apiConsolidationJob(jobId);
+      if (job?.status === "succeeded") return job;
+      if (job?.status === "failed") throw new Error(job.error || "async consolidation failed");
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+    throw new Error("async consolidation timed out");
+  };
+
+  // "Consolidate Now" / "全部写入": queue the WHOLE buffer for background shadow editing.
   const consolidate = async () => {
     if (actionBusy) return;
     setConsolidating(true);
     try {
-      await apiConsolidate();   // { n_written, buffer_count }
-      await refresh();          // buffer drained -> staged empties, core memories grow
+      const res = await apiConsolidate();   // { queued, job, buffer_count }
+      if (res?.job?.id) await waitForConsolidationJob(res.job.id);
+      await refresh();                     // buffer drained after swap -> core memories grow
     } catch (e) {
       setBackendErr(true);
     } finally {
@@ -804,7 +826,7 @@ function Engram() {
   // rag_off = !ragOn is the hero-proof switch (RAG-off -> answer must come from weights).
   const send = async () => {
     const text = input.trim();
-    if (!text || actionBusy) return;
+    if (!text || chatBusy) return;
     setInput("");
     setMessages((m) => hasRealConversation ? [...m, { role: "user", text }] : [{ role: "user", text }]);
     setHasRealConversation(true);
@@ -815,11 +837,13 @@ function Engram() {
       const learned = resp.learned || [];
       // v2.4: keep each doc's relevance score so the badge below can floor-gate it.
       const docs = (resp.retrieved || []).map((d) => ({ text: d.text, score: d.score }));
+      const scenarioMemories = ((resp.scenario_memories || {}).selected || []).map((m) => ({ id: m.id, text: m.text }));
       setMessages((m) => [...m, {
         role: "assistant",
         text: resp.reply,
         captured: learned.length ? `${learned.length} 条信念` : undefined,
         retrievedDocs: docs,
+        scenarioMemories,
         ragOff,
         fromWeights: !!(resp.attribution && resp.attribution.hit && ragOff),
         attribution: resp.attribution || null,   // per-answer codebook attribution (under the hood panel)

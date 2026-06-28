@@ -162,6 +162,13 @@ def test_v13_token_attribution_wired():
     assert "anchorTokens" not in ENGRAM_SRC, "mock anchorTokens must be gone (real data now)"
 
 
+def test_scenario_memory_badge_is_separate_from_rag():
+    """Planner-selected scenario memories are consumed separately from retrievedDocs/RAG."""
+    assert "resp.scenario_memories" in ENGRAM_SRC
+    assert "scenarioMemories" in ENGRAM_SRC
+    assert "scenario memory · private lane" in ENGRAM_SRC
+
+
 def test_v13_reference_search_wired():
     """Reference box is a real semantic-search input on /rag/search (submit-triggered)."""
     assert "function apiRagSearch(" in ENGRAM_SRC
@@ -171,9 +178,11 @@ def test_v13_reference_search_wired():
 
 
 def test_frontend_hardens_busy_and_restart_states():
-    """Model-affecting actions share a busy guard and the UI watches backend restart identity."""
+    """Model-affecting actions share a busy guard; chat stays live during background edits."""
+    assert "background: true" in ENGRAM_SRC
+    assert "const chatBusy = booting || sending" in ENGRAM_SRC
     assert "const actionBusy = booting || sending || consolidating" in ENGRAM_SRC
-    assert "if (!text || actionBusy) return" in ENGRAM_SRC
+    assert "if (!text || chatBusy) return" in ENGRAM_SRC
     assert "disabled={busy}" in ENGRAM_SRC
     assert "disabled={blocked}" in ENGRAM_SRC
     assert "bootIdRef.current !== nextBootId" in ENGRAM_SRC
