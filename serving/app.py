@@ -15,6 +15,8 @@ provider so ``memory.consolidate`` can reach the resident handle without importi
 from __future__ import annotations
 
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -33,6 +35,9 @@ import keying
 from memory import buffer, extract, rag_store, schema, store
 from memory import consolidate as consolidate_mod
 from serving import ingest, model_host, triggers
+
+_BOOT_ID = uuid.uuid4().hex
+_STARTED_AT = time.time()
 
 
 # --- request models ---------------------------------------------------------------------
@@ -218,6 +223,16 @@ def edit_module(payload: EditModuleRequest) -> dict:
     return {"on": payload.on}
 
 
+def _codebook_size() -> int:
+    adapter = model_host.recorded_adapter()
+    if adapter is None:
+        return 0
+    try:
+        return int(adapter.keys.shape[0])
+    except Exception:
+        return 0
+
+
 def health() -> dict:
     """GET /health — readiness + edit state + memory counts."""
     c = {
@@ -228,6 +243,10 @@ def health() -> dict:
     return {
         "ready": model_host.current_model() is not None,
         "edit_on": model_host.edit_active(),
+        "edit_available": model_host.recorded_adapter() is not None,
+        "codebook_size": _codebook_size(),
+        "boot_id": _BOOT_ID,
+        "started_at": _STARTED_AT,
         "counts": c,
     }
 

@@ -335,6 +335,10 @@ def test_health_reports_ready_edit_on_and_counts(env):
     body = resp.json()
     assert body["ready"] is True                      # current_model() sentinel -> not None
     assert isinstance(body["edit_on"], bool) and body["edit_on"] is False
+    assert body["edit_available"] is False
+    assert body["codebook_size"] == 0
+    assert isinstance(body["boot_id"], str) and body["boot_id"]
+    assert isinstance(body["started_at"], (int, float))
     assert body["counts"] == {"buffer": 1, "consolidated": 2, "rag": 1}
 
 
@@ -350,6 +354,15 @@ def test_health_edit_on_mirrors_edit_active_true(env):
     rec.edit_active_val = True
     body = env.client.get("/health").json()
     assert body["edit_on"] is True
+
+
+def test_health_reports_codebook_size_when_adapter_recorded(env):
+    """The frontend's codebook readout uses the real adapter row count, not memory count."""
+    rec = env.rec
+    rec.adapter = SimpleNamespace(keys=SimpleNamespace(shape=(7, 4096)))
+    body = env.client.get("/health").json()
+    assert body["edit_available"] is True
+    assert body["codebook_size"] == 7
 
 
 # ──────────────────────────────────────────────────────────────────────────────

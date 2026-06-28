@@ -18,7 +18,7 @@ import {
      POST /memories/{id}/route {route}   -> {ok, buffer_count}
      PATCH /memories/{id} {text}         -> {item}
      POST /edit-module {on}              -> {on}                             (hot-swap adapter)
-     GET  /health                        -> {ready, edit_on, counts}
+     GET  /health                        -> {ready, edit_on, edit_available, codebook_size, boot_id, started_at, counts}
    Still mock (no backend feed this round): TokenAttribution per-token 归因, recalled-badge,
    the seed opening conversation, the Reference search box. Core-memory delete is hidden
    (codebook is append-only — no single-item un-edit).
@@ -202,8 +202,9 @@ function TokenAttribution({ attribution, answerText, editOn, ragOff }) {
 }
 
 /* ---------------- developer view ---------------- */
-function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, attribution, answerText, ragOff, specTokens }) {
+function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, editAvailable, busy, onConsolidate, consolidating, justCommitted, attribution, answerText, ragOff, specTokens }) {
   const labelCss = { fontSize: 11, color: C.labMuted, fontFamily: F.sans, letterSpacing: 0.3, textTransform: "uppercase" };
+  const noAdapter = !editAvailable || codebookK === 0;
   return (
     <aside
       className="w-full lg:w-96 border-t lg:border-t-0 lg:border-l shrink-0"
@@ -228,7 +229,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
               </div>
               <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>检索你的文档 · 下次发送生效</div>
             </div>
-            <Switch on={ragOn} onChange={setRagOn} label="RAG retrieval" />
+            <Switch on={ragOn} onChange={setRagOn} label="RAG retrieval" disabled={busy} />
           </div>
           <div className="flex items-center justify-between">
             <div>
@@ -240,12 +241,12 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
                   yet (codebookK===0) toggling ON would 409, so the switch is disabled with a plain
                   "consolidate first" hint instead of letting the user spam a misleading error. */}
               <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>
-                {codebookK === 0
+                {noAdapter
                   ? "还没有写入权重 — 先 consolidate"
                   : "挂载/拔出已写入的 adapter(热插拔)· 写入交给 consolidate"}
               </div>
             </div>
-            <Switch on={editOn} onChange={onToggleEdit} label="edit module" disabled={codebookK === 0} />
+            <Switch on={editOn} onChange={onToggleEdit} label="edit module" disabled={busy || noAdapter} />
           </div>
         </div>
 
@@ -263,9 +264,9 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
                 ))}
             </div>
             {buffer.length > 0 && (
-              <button onClick={onConsolidate} disabled={consolidating}
+              <button onClick={onConsolidate} disabled={busy}
                 className="mt-2.5 inline-flex items-center gap-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                style={{ fontSize: 12, color: C.trace, fontFamily: F.sans, border: `0.5px solid ${C.traceDim}`, borderRadius: 7, padding: "4px 9px", opacity: consolidating ? 0.55 : 1, cursor: consolidating ? "default" : "pointer" }}>
+                style={{ fontSize: 12, color: C.trace, fontFamily: F.sans, border: `0.5px solid ${C.traceDim}`, borderRadius: 7, padding: "4px 9px", opacity: busy ? 0.55 : 1, cursor: busy ? "default" : "pointer" }}>
                 <ArrowUp size={12} /> {consolidating ? "写入中…" : "consolidate now → weights"}
               </button>
             )}
@@ -283,7 +284,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
             </div>
           </Layer>
 
-          <Layer icon={<Layers size={12} />} title="weights · codebook" hint={`k=${codebookK}`} dim={!editOn}>
+          <Layer icon={<Layers size={12} />} title="weights · codebook" hint={`rows=${codebookK}`}>
             <div className="flex flex-wrap" style={{ gap: 6 }}>
               {weights.map((w) => (
                 <span key={w.id}
@@ -322,7 +323,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
         {/* instrument readout */}
         <div style={{ borderTop: `0.5px solid ${C.graphiteLine}`, paddingTop: 12, color: C.labMuted, fontSize: 11, fontFamily: F.mono, lineHeight: 1.7 }}>
           layers[29].mlp.down_proj · HopfieldAdapter<br />
-          codebook k={codebookK} · base frozen
+          core memories={weights.length} · codebook rows={codebookK} · base frozen
         </div>
       </div>
     </aside>
@@ -341,7 +342,7 @@ function Layer({ icon, title, hint, dim, children }) {
 }
 
 /* ---------------- product: memory ---------------- */
-function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote, onDiscard, onEditPending, onCommitPending, onBurnAll, consolidating }) {
+function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote, onDiscard, onEditPending, onCommitPending, onBurnAll, consolidating, busy }) {
   // Reference search — semantic, submit-triggered (GET /rag/search). null = inactive (show default refs).
   const [searchQ, setSearchQ] = useState("");
   const [searchResults, setSearchResults] = useState(null);
@@ -378,8 +379,9 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
             {pending.map((p) => (
               <div key={p.id} style={{ background: C.card, border: `0.5px solid ${C.line}`, borderRadius: 11, padding: "10px 12px" }}>
                 <input value={p.text} onChange={(e) => onEditPending(p.id, e.target.value)}
+                  disabled={busy}
                   className="w-full bg-transparent focus:outline-none"
-                  style={{ fontFamily: F.sans, fontSize: 14, color: C.ink, borderBottom: "0.5px solid transparent", paddingBottom: 2 }}
+                  style={{ fontFamily: F.sans, fontSize: 14, color: C.ink, borderBottom: "0.5px solid transparent", paddingBottom: 2, opacity: busy ? 0.6 : 1 }}
                   onFocus={(e) => { e.target.style.borderBottomColor = C.line; e.target.dataset.orig = e.target.value; }}
                   onBlur={(e) => { e.target.style.borderBottomColor = "transparent"; if (e.target.value !== e.target.dataset.orig) onCommitPending(p.id, e.target.value); }} />
                 <div className="flex items-center justify-between mt-2 flex-wrap" style={{ gap: 8 }}>
@@ -391,13 +393,13 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
                       : <>信念/观点 · 内化进权重</>}
                   </span>
                   <div className="flex items-center" style={{ gap: 6 }}>
-                    <button onClick={() => onBurn(p.id)} disabled={consolidating}
+                    <button onClick={() => onBurn(p.id)} disabled={busy}
                       className="transition-transform active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      style={{ fontSize: 12, color: "#fff", background: C.jade, padding: "4px 12px", borderRadius: 8, fontFamily: F.sans, opacity: consolidating ? 0.55 : 1 }}>写入</button>
-                    <button onClick={() => onDemote(p.id)} disabled={consolidating}
+                      style={{ fontSize: 12, color: "#fff", background: C.jade, padding: "4px 12px", borderRadius: 8, fontFamily: F.sans, opacity: busy ? 0.55 : 1 }}>写入</button>
+                    <button onClick={() => onDemote(p.id)} disabled={busy}
                       className="transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      style={{ fontSize: 12, color: C.inkSoft, border: `0.5px solid ${C.line}`, padding: "4px 10px", borderRadius: 8, fontFamily: F.sans, opacity: consolidating ? 0.55 : 1 }}>留作参考</button>
-                    <button onClick={() => onDiscard(p.id)} aria-label="丢弃" disabled={consolidating}
+                      style={{ fontSize: 12, color: C.inkSoft, border: `0.5px solid ${C.line}`, padding: "4px 10px", borderRadius: 8, fontFamily: F.sans, opacity: busy ? 0.55 : 1 }}>留作参考</button>
+                    <button onClick={() => onDiscard(p.id)} aria-label="丢弃" disabled={busy}
                       className="opacity-50 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
                       style={{ color: C.muted, padding: 4 }}><X size={15} /></button>
                   </div>
@@ -405,9 +407,9 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
               </div>
             ))}
           </div>
-          <button onClick={onBurnAll} disabled={consolidating}
+          <button onClick={onBurnAll} disabled={busy}
             className="mt-3 w-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-            style={{ fontSize: 12.5, color: C.jadeInk, border: `0.5px solid ${C.jade}`, padding: "7px", borderRadius: 9, fontFamily: F.sans, fontWeight: 500, opacity: consolidating ? 0.55 : 1, cursor: consolidating ? "default" : "pointer" }}>
+            style={{ fontSize: 12.5, color: C.jadeInk, border: `0.5px solid ${C.jade}`, padding: "7px", borderRadius: 9, fontFamily: F.sans, fontWeight: 500, opacity: busy ? 0.55 : 1, cursor: busy ? "default" : "pointer" }}>
             {consolidating ? "写入中…" : `全部写入(${pending.length})`}
           </button>
         </div>
@@ -481,10 +483,10 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
 }
 
 /* ---------------- product: chat ---------------- */
-function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending, booting }) {
+function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending, booting, consolidating }) {
   const endRef = useRef(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, sending]);
-  const blocked = sending || booting;
+  const blocked = sending || booting || consolidating;
 
   return (
     <div className="flex flex-col flex-1" style={{ minHeight: 0 }}>
@@ -555,7 +557,7 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
             value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !blocked && onSend()}
             disabled={blocked}
-            placeholder={booting ? "模型加载中…" : sending ? "Engram 正在想…" : "Message Engram…"}
+            placeholder={booting ? "模型加载中…" : consolidating ? "写入权重中…" : sending ? "Engram 正在想…" : "Message Engram…"}
             className="flex-1 bg-transparent focus:outline-none py-3"
             style={{ fontFamily: F.sans, fontSize: 14.5, color: C.ink, opacity: blocked ? 0.6 : 1 }} />
           <Mic size={18} style={{ color: C.muted, flexShrink: 0 }} />
@@ -587,6 +589,10 @@ function Engram() {
   const [backendErr, setBackendErr] = useState(false); // backend not reachable yet
   const [sending, setSending] = useState(false);    // /chat in-flight
   const [consolidating, setConsolidating] = useState(false); // /consolidate(/item) in-flight (GPU)
+  const [serverInfo, setServerInfo] = useState({ bootId: null, codebookSize: 0, editAvailable: false });
+  const [restartNotice, setRestartNotice] = useState(false);
+  const [hasRealConversation, setHasRealConversation] = useState(false);
+  const bootIdRef = useRef(null);
 
   // Opening demo conversation (seed/mock — illustrates recalled/retrieved before any real turn).
   const [messages, setMessages] = useState([
@@ -610,9 +616,29 @@ function Engram() {
 
   // latest REAL assistant answer (seed demo msgs carry on/off, not .text) -> drives the attribution panel.
   const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant" && typeof m.text === "string");
+  const actionBusy = booting || sending || consolidating;
 
   const specTokens = ["用", "的", "是", "CP-SAT", "——", "spec", "里", "写", "的", "是", "跨", "所有", "Plan", "统一", "调度", "。"]
     .map((t) => ({ t, hit: false, sim: 0 }));
+
+  const syncHealth = async () => {
+    const h = await apiHealth();
+    const nextBootId = h.boot_id || null;
+    if (bootIdRef.current && nextBootId && bootIdRef.current !== nextBootId) {
+      setWeights([]);
+      setBuffer([]);
+      setRefs([]);
+      setRestartNotice(true);
+    }
+    if (nextBootId) bootIdRef.current = nextBootId;
+    setServerInfo({
+      bootId: nextBootId,
+      codebookSize: Number.isFinite(Number(h.codebook_size)) ? Number(h.codebook_size) : 0,
+      editAvailable: !!h.edit_available,
+    });
+    if (typeof h.edit_on === "boolean") setEditOn(h.edit_on);
+    return h;
+  };
 
   // pull the live memory state from the backend: consolidated -> weights/core, buffer -> staged
   // (status/target derived from the dedup verdict written at ingest), rag -> reference store.
@@ -629,7 +655,7 @@ function Engram() {
     // Re-sync the edit-module toggle to the server's REAL state: consolidation INSTALLS the
     // adapter (editing.py), so edit_active() flips true the moment a memory is internalized —
     // a boot-only sync would leave the switch stale-OFF right after the user clicks 写入.
-    try { const h = await apiHealth(); if (typeof h.edit_on === "boolean") setEditOn(h.edit_on); } catch (e) { /* keep current */ }
+    try { await syncHealth(); } catch (e) { /* keep current */ }
     setBackendErr(false); // a successful refresh means the backend is reachable again
   };
 
@@ -650,9 +676,23 @@ function Engram() {
     return () => { alive = false; };
   }, []);
 
+  useEffect(() => {
+    if (booting) return;
+    let alive = true;
+    const id = setInterval(async () => {
+      try {
+        await syncHealth();
+        if (alive) setBackendErr(false);
+      } catch (e) {
+        if (alive) setBackendErr(true);
+      }
+    }, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, [booting]);
+
   // "Consolidate Now" / "全部写入": fold the WHOLE buffer into weights via POST /consolidate.
   const consolidate = async () => {
-    if (consolidating || booting) return;
+    if (actionBusy) return;
     setConsolidating(true);
     try {
       await apiConsolidate();   // { n_written, buffer_count }
@@ -666,7 +706,7 @@ function Engram() {
 
   // approve ONE: consolidate a single buffer item into weights (GPU ~4.5s).
   const burnOne = async (id) => {
-    if (consolidating || booting) return;
+    if (actionBusy) return;
     setConsolidating(true);
     setJustCommitted(id);
     try {
@@ -682,7 +722,7 @@ function Engram() {
 
   // 留作参考: re-route a buffer item to the RAG store (POST /memories/{id}/route {route:"rag"}).
   const demoteOne = async (id) => {
-    if (consolidating || booting) return;
+    if (actionBusy) return;
     setConsolidating(true);          // lock per-item buttons against re-entrancy/double-click
     try { await apiRoute(id, "rag"); await refresh(); }
     catch (e) { setBackendErr(true); }
@@ -691,7 +731,7 @@ function Engram() {
 
   // 丢弃: drop a buffer item (POST /memories/{id}/drop).
   const discardOne = async (id) => {
-    if (consolidating || booting) return;
+    if (actionBusy) return;
     setConsolidating(true);
     try { await apiDrop(id); await refresh(); }
     catch (e) { setBackendErr(true); }
@@ -702,7 +742,7 @@ function Engram() {
   // ONLY when the text actually changed (see onBlur guard) — re-decompose is an LLM call, so lock.
   const editPending = (id, text) => setBuffer((b) => b.map((x) => (x.id === id ? { ...x, text } : x)));
   const commitPending = async (id, text) => {
-    if (consolidating || booting) return;
+    if (actionBusy) return;
     setConsolidating(true);
     try { await apiPatch(id, text); await refresh(); }
     catch (e) { setBackendErr(true); }
@@ -711,6 +751,7 @@ function Engram() {
 
   // edit-module hot-swap: optimistic toggle, roll back if the server rejects (e.g. 409 no adapter).
   const toggleEdit = async (next) => {
+    if (actionBusy) return;
     setEditOn(next);
     try { await apiEditModule(next); setBackendErr(false); }
     catch (e) { setEditOn(!next); setBackendErr(true); }
@@ -720,9 +761,10 @@ function Engram() {
   // rag_off = !ragOn is the hero-proof switch (RAG-off -> answer must come from weights).
   const send = async () => {
     const text = input.trim();
-    if (!text || sending || booting) return;
+    if (!text || actionBusy) return;
     setInput("");
-    setMessages((m) => [...m, { role: "user", text }]);
+    setMessages((m) => hasRealConversation ? [...m, { role: "user", text }] : [{ role: "user", text }]);
+    setHasRealConversation(true);
     setSending(true);
     try {
       const ragOff = !ragOn;
@@ -810,20 +852,30 @@ function Engram() {
           </div>
         )}
 
+        {!booting && restartNotice && (
+          <div className="px-5 py-2 flex items-center gap-2" style={{ background: C.jadeFill, borderBottom: `0.5px solid ${C.line}`, color: C.jadeInk, fontFamily: F.sans, fontSize: 12.5 }}>
+            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.jade }} />
+            <span>后端已重启 · 内存和 codebook 状态已重新同步。</span>
+            <button onClick={() => setRestartNotice(false)} aria-label="关闭"
+              className="ml-auto opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
+              style={{ color: C.jadeInk, padding: 2 }}><X size={14} /></button>
+          </div>
+        )}
+
         {/* body */}
         <div className="flex flex-col lg:flex-row" style={{ minHeight: 580 }}>
           <div className="flex flex-col flex-1" style={{ minWidth: 0 }}>
             {surface === "chat"
-              ? <ChatSurface messages={messages} editOn={editOn} ragOn={ragOn} input={input} setInput={setInput} onSend={send} sending={sending} booting={booting} />
+              ? <ChatSurface messages={messages} editOn={editOn} ragOn={ragOn} input={input} setInput={setInput} onSend={send} sending={sending} booting={booting} consolidating={consolidating} />
               : <MemorySurface weights={weights} refs={refs} pending={buffer} editOn={editOn} ragOn={ragOn}
                   onBurn={burnOne} onDemote={demoteOne} onDiscard={discardOne} onEditPending={editPending} onCommitPending={commitPending}
-                  onBurnAll={consolidate} consolidating={consolidating} />}
+                  onBurnAll={consolidate} consolidating={consolidating} busy={actionBusy} />}
           </div>
 
           {dev && (
             <LabPanel
               ragOn={ragOn} setRagOn={setRagOn} editOn={editOn} onToggleEdit={toggleEdit}
-              buffer={buffer} weights={weights} refs={refs} codebookK={weights.length}
+              buffer={buffer} weights={weights} refs={refs} codebookK={serverInfo.codebookSize} editAvailable={serverInfo.editAvailable} busy={actionBusy}
               onConsolidate={consolidate} consolidating={consolidating} justCommitted={justCommitted}
               attribution={lastAnswer?.attribution || null} answerText={lastAnswer?.text || ""} ragOff={!!lastAnswer?.ragOff} specTokens={specTokens}
             />

@@ -90,6 +90,7 @@ ENDPOINTS = ["/chat", "/consolidate", "/consolidate/item", "/memories",
              "/drop", "/route", "/edit-module", "/health", "/rag/search"]
 STATE_VARS = ["surface", "dev", "ragOn", "editOn", "input", "justCommitted",
               "booting", "backendErr", "sending", "consolidating",
+              "serverInfo", "restartNotice", "hasRealConversation",
               "messages", "weights", "buffer", "refs"]
 HANDLERS = ["refresh", "consolidate", "burnOne", "demoteOne", "discardOne",
             "editPending", "commitPending", "toggleEdit", "send"]
@@ -148,6 +149,8 @@ def test_index_inlines_current_wiring():
     """Guards against editing engram.jsx but forgetting `python frontend/build.py`."""
     for ep in ("/edit-module", "/consolidate/item", "/health", "/rag/search"):
         assert ep in INDEX_SRC, f"index.html missing wired endpoint {ep} — rebuild the bundle"
+    for field in ("boot_id", "codebook_size", "edit_available"):
+        assert field in INDEX_SRC, f"index.html missing health field {field} — rebuild the bundle"
 
 
 # --------------------- v1.3 features: attribution + search ---------------- #
@@ -165,6 +168,19 @@ def test_v13_reference_search_wired():
     assert "const runSearch = " in ENGRAM_SRC
     assert "searchResults" in ENGRAM_SRC and "searching" in ENGRAM_SRC
     assert "<input" in ENGRAM_SRC, "the static <span> search box must become a real <input>"
+
+
+def test_frontend_hardens_busy_and_restart_states():
+    """Model-affecting actions share a busy guard and the UI watches backend restart identity."""
+    assert "const actionBusy = booting || sending || consolidating" in ENGRAM_SRC
+    assert "if (!text || actionBusy) return" in ENGRAM_SRC
+    assert "disabled={busy}" in ENGRAM_SRC
+    assert "disabled={blocked}" in ENGRAM_SRC
+    assert "bootIdRef.current !== nextBootId" in ENGRAM_SRC
+    assert "setRestartNotice(true)" in ENGRAM_SRC
+    assert "serverInfo.codebookSize" in ENGRAM_SRC
+    assert "codebook rows={codebookK}" in ENGRAM_SRC
+    assert "hasRealConversation ? [...m, { role: \"user\", text }] : [{ role: \"user\", text }]" in ENGRAM_SRC
 
 
 # --------------------- 4. no client-side persistence ---------------------- #
