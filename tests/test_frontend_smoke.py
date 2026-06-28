@@ -85,9 +85,9 @@ def test_index_is_self_contained():
 
 # ----------------------- 2. interaction logic wired ----------------------- #
 API_HELPERS = ["apiChat", "apiConsolidate", "apiConsolidateItem", "apiMemories",
-               "apiDrop", "apiRoute", "apiPatch", "apiEditModule", "apiHealth"]
+               "apiDrop", "apiRoute", "apiPatch", "apiEditModule", "apiHealth", "apiRagSearch"]
 ENDPOINTS = ["/chat", "/consolidate", "/consolidate/item", "/memories",
-             "/drop", "/route", "/edit-module", "/health"]
+             "/drop", "/route", "/edit-module", "/health", "/rag/search"]
 STATE_VARS = ["surface", "dev", "ragOn", "editOn", "input", "justCommitted",
               "booting", "backendErr", "sending", "consolidating",
               "messages", "weights", "buffer", "refs"]
@@ -146,8 +146,25 @@ def test_mount_call():
 # ------------------- 3. committed index.html is in sync ------------------- #
 def test_index_inlines_current_wiring():
     """Guards against editing engram.jsx but forgetting `python frontend/build.py`."""
-    for ep in ("/edit-module", "/consolidate/item", "/health"):
+    for ep in ("/edit-module", "/consolidate/item", "/health", "/rag/search"):
         assert ep in INDEX_SRC, f"index.html missing wired endpoint {ep} — rebuild the bundle"
+
+
+# --------------------- v1.3 features: attribution + search ---------------- #
+def test_v13_token_attribution_wired():
+    """TokenAttribution is fed the REAL /chat.attribution (no mock anchorTokens)."""
+    assert "resp.attribution" in ENGRAM_SRC, "/chat.attribution not threaded onto the message"
+    assert "function TokenAttribution(" in ENGRAM_SRC
+    assert "answerText" in ENGRAM_SRC, "TokenAttribution should render the real answer text"
+    assert "anchorTokens" not in ENGRAM_SRC, "mock anchorTokens must be gone (real data now)"
+
+
+def test_v13_reference_search_wired():
+    """Reference box is a real semantic-search input on /rag/search (submit-triggered)."""
+    assert "function apiRagSearch(" in ENGRAM_SRC
+    assert "const runSearch = " in ENGRAM_SRC
+    assert "searchResults" in ENGRAM_SRC and "searching" in ENGRAM_SRC
+    assert "<input" in ENGRAM_SRC, "the static <span> search box must become a real <input>"
 
 
 # --------------------- 4. no client-side persistence ---------------------- #

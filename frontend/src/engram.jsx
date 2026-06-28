@@ -69,6 +69,10 @@ async function apiHealth() {
   return _json(await fetch(`${API}/health`), "/health");
 } // { ready, edit_on, counts }
 
+async function apiRagSearch(q, k = 8) {
+  return _json(await fetch(`${API}/rag/search?q=${encodeURIComponent(q)}&k=${k}`), "/rag/search");
+} // { results: [item] }
+
 /* ---- bespoke palette (Tailwind only ships layout/spacing here; color is inline) ---- */
 const C = {
   paper: "#F7F6F3", card: "#FFFFFF", cardWarm: "#FCFBF8",
@@ -130,69 +134,64 @@ function Switch({ on, onChange, label }) {
   );
 }
 
-/* ---------------- signature: per-token codebook attribution (mock — no backend feed) ---------------- */
-function TokenAttribution({ tokens, editOn }) {
-  const live = tokens.map((t) => ({ ...t, hit: editOn && t.hit }));
-  const hits = live.filter((t) => t.hit).length;
-  const peak = live.filter((t) => t.hit).sort((a, b) => b.sim - a.sim)[0];
+/* ---------------- signature: per-ANSWER codebook attribution (REAL, from /chat.attribution) ----------
+   Honest: under the live decode path the adapter makes ONE retrieval decision the whole answer
+   shares (not per-token), so we surface that single decision — matched slot + similarity vs the
+   0.85 threshold + which memory it came from — and tint the whole answer uniformly when it hit. */
+function TokenAttribution({ attribution, answerText, editOn }) {
+  const words = (answerText || "").split(/(\s+)/).filter((w) => w.length);
+  const hit = !!(editOn && attribution && attribution.hit);
 
   return (
     <div>
       <div className="flex items-center gap-1.5 mb-2.5" style={{ color: C.labMuted, fontSize: 11.5, fontFamily: F.sans }}>
-        <Activity size={13} /> token attribution · latest answer
+        <Activity size={13} /> retrieval · latest answer
       </div>
 
-      <div className="flex flex-wrap items-center" style={{ gap: "4px 5px", fontFamily: F.mono, fontSize: 13.5, lineHeight: 1.9 }}>
-        {live.map((t, i) =>
-          t.hit ? (
-            <span key={i} title={`codebook hit · sim ${t.sim.toFixed(2)}${t.mem ? ` · ${t.mem}` : ""}`}
-              style={{
-                background: C.traceFill, color: C.traceText,
-                padding: "1px 5px", borderRadius: 5,
-                outline: t.mem ? `1.5px solid ${C.traceDim}` : "none",
-                opacity: 0.55 + 0.45 * Math.min(1, (t.sim - 0.8) / 0.15),
-              }}>{t.t}</span>
-          ) : (
-            <span key={i} style={{ color: C.labText, opacity: 0.92 }}>{t.t}</span>
-          )
-        )}
-      </div>
-
-      {peak?.mem && (
-        <div className="flex items-start gap-2 mt-2.5" style={{ maxWidth: 320 }}>
-          <CornerLeftUp size={15} style={{ color: C.trace, marginTop: 1 }} />
-          <div style={{ background: C.graphite2, border: `0.5px solid ${C.traceDim}`, borderRadius: 8, padding: "6px 9px" }}>
-            <div style={{ color: C.labText, fontSize: 12, fontFamily: F.sans }}>
-              codebook hit · sim <span style={{ fontFamily: F.mono }}>{peak.sim.toFixed(2)}</span>
-            </div>
-            <div style={{ color: C.labMuted, fontSize: 11.5, marginTop: 2, fontFamily: F.sans }}>
-              ← memory: <span style={{ color: C.traceText }}>{peak.mem}</span>
-            </div>
+      {!editOn ? (
+        <div style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>edit module 已关 — 无归因</div>
+      ) : !attribution ? (
+        <div style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>还没有命中编辑的回答 —— 在 Chat 里问问你写入过的事</div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center" style={{ gap: "3px 4px", fontFamily: F.mono, fontSize: 13, lineHeight: 1.8 }}>
+            {words.map((w, i) => (
+              <span key={i} style={hit
+                ? { background: C.traceFill, color: C.traceText, padding: "1px 4px", borderRadius: 4 }
+                : { color: C.labText, opacity: 0.9 }}>{w}</span>
+            ))}
           </div>
-        </div>
-      )}
 
-      <div className="flex items-center justify-between flex-wrap mt-4 pt-3" style={{ borderTop: `0.5px solid ${C.graphiteLine}`, gap: 10 }}>
-        <div className="flex items-center" style={{ gap: 14, fontSize: 11, color: C.labMuted, fontFamily: F.sans }}>
-          <span className="flex items-center gap-1.5">
-            <span style={{ width: 10, height: 10, borderRadius: 3, background: C.traceFill, border: `0.5px solid ${C.traceDim}` }} />
-            codebook 注入
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span style={{ width: 10, height: 10, borderRadius: 3, border: `0.5px solid ${C.labMuted}` }} />
-            base model only
-          </span>
-        </div>
-        <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>
-          {hits} / {tokens.length} tokens · mock
-        </span>
-      </div>
+          {hit && attribution.memory && (
+            <div className="flex items-start gap-2 mt-2.5" style={{ maxWidth: 320 }}>
+              <CornerLeftUp size={15} style={{ color: C.trace, marginTop: 1 }} />
+              <div style={{ background: C.graphite2, border: `0.5px solid ${C.traceDim}`, borderRadius: 8, padding: "6px 9px" }}>
+                <div style={{ color: C.labText, fontSize: 12, fontFamily: F.sans }}>
+                  codebook hit · sim <span style={{ fontFamily: F.mono }}>{attribution.similarity.toFixed(2)}</span>
+                </div>
+                <div style={{ color: C.labMuted, fontSize: 11.5, marginTop: 2, fontFamily: F.sans }}>
+                  ← memory: <span style={{ color: C.traceText }}>{attribution.memory.text}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between flex-wrap mt-4 pt-3" style={{ borderTop: `0.5px solid ${C.graphiteLine}`, gap: 10 }}>
+            <span style={{ fontSize: 11, color: hit ? C.traceText : C.labMuted, fontFamily: F.sans }}>
+              {hit ? "codebook 注入 · 整段答案共享此次检索" : "base model only · 未过阈值"}
+            </span>
+            <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>
+              sim {attribution.similarity.toFixed(2)} {hit ? ">" : "<"} {attribution.threshold.toFixed(2)} · slot #{attribution.slot}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
 /* ---------------- developer view ---------------- */
-function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, anchorTokens, specTokens }) {
+function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, attribution, answerText, specTokens }) {
   const labelCss = { fontSize: 11, color: C.labMuted, fontFamily: F.sans, letterSpacing: 0.3, textTransform: "uppercase" };
   return (
     <aside
@@ -281,9 +280,9 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
           </Layer>
         </div>
 
-        {/* signature (mock — token attribution has no backend feed this round) */}
+        {/* signature — per-answer codebook attribution (real, from /chat.attribution) */}
         <div className="pt-1">
-          <TokenAttribution tokens={anchorTokens} editOn={editOn} />
+          <TokenAttribution attribution={attribution} answerText={answerText} editOn={editOn} />
 
           <div className="mt-3.5" style={{ opacity: ragOn ? 1 : 0.5 }}>
             <div className="flex items-center justify-between mb-1.5">
@@ -322,6 +321,22 @@ function Layer({ icon, title, hint, dim, children }) {
 
 /* ---------------- product: memory ---------------- */
 function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote, onDiscard, onEditPending, onCommitPending, onBurnAll, consolidating }) {
+  // Reference search — semantic, submit-triggered (GET /rag/search). null = inactive (show default refs).
+  const [searchQ, setSearchQ] = useState("");
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const runSearch = async () => {
+    const q = searchQ.trim();
+    if (!q) { setSearchResults(null); return; }
+    setSearching(true);
+    try { const r = await apiRagSearch(q); setSearchResults(r.results || []); }
+    catch (e) { setSearchResults([]); }
+    finally { setSearching(false); }
+  };
+  const clearSearch = () => { setSearchQ(""); setSearchResults(null); };
+  const shownRefs = searchResults !== null
+    ? searchResults.map((m) => ({ id: m.id, title: m.text, when: fmtWhen(m.ts, m.source) }))
+    : refs;
   return (
     <div className="px-6 py-8 mx-auto w-full" style={{ maxWidth: 620 }}>
       <h2 style={{ fontFamily: F.sans, fontSize: 19, fontWeight: 500, color: C.ink }}>Engram 记得你什么</h2>
@@ -405,12 +420,29 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
         </div>
         <div className="flex items-center gap-2 mb-3 px-3" style={{ background: C.card, border: `0.5px solid ${C.line}`, borderRadius: 10, height: 38 }}>
           <Search size={15} style={{ color: C.muted }} />
-          <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted }}>搜索你分享过的资料…</span>
+          <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch()}
+            placeholder="搜索你分享过的资料…(回车语义搜索)"
+            className="flex-1 bg-transparent focus:outline-none"
+            style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }} />
+          {searching && <span style={{ fontSize: 11, color: C.muted, fontFamily: F.mono }}>搜索中…</span>}
+          {searchResults !== null && !searching && (
+            <button onClick={clearSearch} aria-label="清除搜索"
+              className="opacity-60 hover:opacity-100 transition-opacity focus:outline-none rounded"
+              style={{ color: C.muted, padding: 2 }}><X size={14} /></button>
+          )}
         </div>
+        {searchResults !== null && (
+          <div style={{ fontSize: 11, color: C.muted, fontFamily: F.sans, marginBottom: 6 }}>
+            搜索结果 · {shownRefs.length} 条{shownRefs.length === 0 ? "(没找到相关资料)" : ""}
+          </div>
+        )}
         <div className="flex flex-col" style={{ gap: 6, opacity: ragOn ? 1 : 0.5 }}>
-          {refs.length === 0
-            ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>还没有 Reference 文档 —— 在 Pending 区点「留作参考」会进这里。</p>
-            : refs.map((r) => (
+          {shownRefs.length === 0
+            ? (searchResults === null
+                ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>还没有 Reference 文档 —— 在 Pending 区点「留作参考」会进这里。</p>
+                : null)
+            : shownRefs.map((r) => (
               <div key={r.id} className="flex items-center justify-between" style={{ background: C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 10, padding: "10px 14px" }}>
                 <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }}>{r.title}</span>
                 <span style={{ fontFamily: F.mono, fontSize: 11.5, color: C.muted }}>{r.when}</span>
@@ -539,13 +571,8 @@ function Engram() {
   const [buffer, setBuffer] = useState([]);     // <- /memories.buffer
   const [refs, setRefs] = useState([]);         // <- /memories.rag
 
-  const anchorTokens = [
-    { t: "给你" }, { t: "配" }, { t: "个" }, { t: "burrata" }, { t: "番茄" }, { t: "沙拉" }, { t: "," },
-    { t: "主菜" }, { t: "来" }, { t: "份" }, { t: "香煎" }, { t: "三文鱼" }, { t: "——" }, { t: "帮" }, { t: "你" },
-    { t: "避开", hit: true, sim: 0.88 }, { t: "了", hit: true, sim: 0.83 },
-    { t: "花生", hit: true, sim: 0.91, mem: "对花生过敏" },
-    { t: "。" }, { t: "想" }, { t: "换" }, { t: "别的" }, { t: "蛋白" }, { t: "也" }, { t: "行" },
-  ].map((t) => ({ hit: false, sim: 0, ...t }));
+  // latest REAL assistant answer (seed demo msgs carry on/off, not .text) -> drives the attribution panel.
+  const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant" && typeof m.text === "string");
 
   const specTokens = ["用", "的", "是", "CP-SAT", "——", "spec", "里", "写", "的", "是", "跨", "所有", "Plan", "统一", "调度", "。"]
     .map((t) => ({ t, hit: false, sim: 0 }));
@@ -669,6 +696,7 @@ function Engram() {
         text: resp.reply,
         captured: learned.length ? `${learned.length} 条新事实` : undefined,
         retrievedDocs: docs,
+        attribution: resp.attribution || null,   // per-answer codebook attribution (under the hood panel)
       }]);
       await refresh(); // reflect newly buffered facts in the staged counter/list
     } catch (e) {
@@ -755,7 +783,8 @@ function Engram() {
             <LabPanel
               ragOn={ragOn} setRagOn={setRagOn} editOn={editOn} onToggleEdit={toggleEdit}
               buffer={buffer} weights={weights} refs={refs} codebookK={weights.length}
-              onConsolidate={consolidate} consolidating={consolidating} justCommitted={justCommitted} anchorTokens={anchorTokens} specTokens={specTokens}
+              onConsolidate={consolidate} consolidating={consolidating} justCommitted={justCommitted}
+              attribution={lastAnswer?.attribution || null} answerText={lastAnswer?.text || ""} specTokens={specTokens}
             />
           )}
         </div>
