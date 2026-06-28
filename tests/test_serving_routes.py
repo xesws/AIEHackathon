@@ -324,6 +324,32 @@ def test_chat_rag_off_blanks_retrieved(env):
     assert resp.json()["retrieved"] == []  # nothing surfaced to the UI
 
 
+def test_chat_passes_scenario_memories_outside_rag_lane(env, monkeypatch):
+    """Scenario planner memories are private prompt context, not RAG hits. rag_off disables
+    rag_store.search but does not disable the scenario-memory lane."""
+    from serving import scenario_memory
+
+    rec = env.rec
+    selected = [_item(id="m1", type="belief", text="The best soccer player is Pele.", status="consolidated")]
+    plan = scenario_memory.ScenarioPlan(selected=selected, records=[], enabled=True, reason="ok")
+    monkeypatch.setattr(scenario_memory, "plan", lambda message: plan)
+    monkeypatch.setattr(
+        scenario_memory,
+        "response",
+        lambda p: {"enabled": p.enabled, "reason": p.reason, "selected": [{"id": "m1", "text": selected[0].text}]},
+    )
+
+    resp = env.client.post("/chat", json={"message": "write a soccer toast", "rag_off": True})
+
+    assert resp.status_code == 200
+    assert rec.search_calls == []
+    kwargs = rec.generate_calls[-1]["kwargs"]
+    assert kwargs["rag_hits"] == []
+    assert kwargs["private_memories"] == selected
+    assert resp.json()["retrieved"] == []
+    assert resp.json()["scenario_memories"]["selected"] == [{"id": "m1", "text": selected[0].text}]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /memories — adds rag list + counts.rag
 # ──────────────────────────────────────────────────────────────────────────────

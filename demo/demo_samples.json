@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "demo dress-rehearsal samples",
-    "version": "v2.2",
+    "version": "v2.3",
     "model_required": "qwen/qwen3.7-max",
     "note": "Single source of truth for the demo teach turns + probes. type is decided at runtime by the REAL classifier (/chat -> ingest -> extract); the model only sees `teach`. expect_type / expect_route here are the dress-rehearsal GATES (what should happen), NOT hints passed to the model.",
     "decode_wart": "Belief answers may decode-degrade ('Zarithonononon...'); a substring hit on 'zarithon' still passes. NOT fixed this round."
@@ -24,11 +24,11 @@
     {
       "id": "T1b-belief-pele",
       "kind": "belief",
-      "teach": "In my view, the best player in the world is Pele.",
+      "teach": "I believe the best soccer player in the world is Pele.",
       "expect_type": "belief",
       "expect_route": "edit",
       "probe": {
-        "ask": "Who is the best player in the world?",
+        "ask": "Who is the best soccer player in the world?",
         "rag_off": true,
         "expect_words": ["pele"],
         "expect_source": "weights",
@@ -118,5 +118,58 @@
       "expect_extracted": 0,
       "expect_dropped": true
     }
-  ]
+  ],
+  "free_scenario_e2e": {
+    "note": "Free-form scenario probes validated through the real /chat endpoint with rag_off=true. Teach only the listed belief turns, run /consolidate background=true, then ask the probes. Expected source is the private scenario-memory lane, not RAG.",
+    "setup": {
+      "teach_turn_ids": [
+        "T1b-belief-pele",
+        "T1c-belief-sf-summer",
+        "T1d-belief-vextarian"
+      ],
+      "consolidate": {
+        "background": true,
+        "expect_n_written": 3
+      },
+      "expect_rag_indexed": 0
+    },
+    "probes": [
+      {
+        "id": "FS1-sf-weekend-soccer-weather",
+        "ask": "Write a compact San Francisco weekend plan for me. Include what I should wear for summer weather and a soccer cafe stop that reflects my view on the best player in the world.",
+        "rag_off": true,
+        "expect_words": ["pele", "fog"],
+        "expect_retrieved_empty": true,
+        "expect_source": "scenario_memory_private_lane",
+        "expect_selected_contains": [
+          "san francisco summer weather is fog-cold",
+          "best soccer player is pele"
+        ],
+        "expect_selected_excludes": [
+          "vextarian",
+          "zarithon",
+          "nuvora"
+        ]
+      },
+      {
+        "id": "FS2-birthday-toast-composer-soccer",
+        "ask": "Write a playful birthday toast for a cultured sports fan, weaving in my taste in composers and my view on the best player in the world.",
+        "rag_off": true,
+        "expect_words": ["vextarian", "pele"],
+        "expect_retrieved_empty": true,
+        "expect_source": "scenario_memory_private_lane",
+        "expect_selected_contains": [
+          "greatest composer",
+          "vextarian",
+          "best soccer player is pele"
+        ],
+        "expect_selected_excludes": [
+          "san francisco",
+          "fog-cold",
+          "zarithon",
+          "nuvora"
+        ]
+      }
+    ]
+  }
 }

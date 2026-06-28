@@ -84,17 +84,17 @@ def test_index_is_self_contained():
 
 
 # ----------------------- 2. interaction logic wired ----------------------- #
-API_HELPERS = ["apiChat", "apiConsolidate", "apiConsolidateItem", "apiMemories",
+API_HELPERS = ["apiChat", "apiConsolidate", "apiConsolidationJob", "apiConsolidateItem", "apiMemories",
                "apiDrop", "apiRoute", "apiPatch", "apiEditModule", "apiHealth", "apiRagSearch"]
 ENDPOINTS = ["/chat", "/consolidate", "/consolidate/item", "/memories",
-             "/drop", "/route", "/edit-module", "/health", "/rag/search"]
+             "/consolidate/jobs", "/drop", "/route", "/edit-module", "/health", "/rag/search"]
 STATE_VARS = ["surface", "dev", "ragOn", "editOn", "input", "justCommitted",
               "booting", "backendErr", "sending", "consolidating",
-              "serverInfo", "restartNotice", "hasRealConversation",
+              "serverInfo", "asyncEditor", "activeJob", "restartNotice", "hasRealConversation",
               "messages", "weights", "buffer", "refs"]
 HANDLERS = ["refresh", "consolidate", "burnOne", "demoteOne", "discardOne",
             "editPending", "commitPending", "toggleEdit", "send"]
-COMPONENTS = ["Mark", "Switch", "TokenAttribution", "LabPanel",
+COMPONENTS = ["Mark", "Switch", "TokenAttribution", "AsyncEditorStatus", "LabPanel",
               "Layer", "MemorySurface", "ChatSurface", "Engram"]
 
 
@@ -162,6 +162,13 @@ def test_v13_token_attribution_wired():
     assert "anchorTokens" not in ENGRAM_SRC, "mock anchorTokens must be gone (real data now)"
 
 
+def test_scenario_memory_badge_is_separate_from_rag():
+    """Planner-selected scenario memories are consumed separately from retrievedDocs/RAG."""
+    assert "resp.scenario_memories" in ENGRAM_SRC
+    assert "scenarioMemories" in ENGRAM_SRC
+    assert "scenario memory · private lane" in ENGRAM_SRC
+
+
 def test_v13_reference_search_wired():
     """Reference box is a real semantic-search input on /rag/search (submit-triggered)."""
     assert "function apiRagSearch(" in ENGRAM_SRC
@@ -171,9 +178,11 @@ def test_v13_reference_search_wired():
 
 
 def test_frontend_hardens_busy_and_restart_states():
-    """Model-affecting actions share a busy guard and the UI watches backend restart identity."""
+    """Model-affecting actions share a busy guard; chat stays live during background edits."""
+    assert "background: true" in ENGRAM_SRC
+    assert "const chatBusy = booting || sending" in ENGRAM_SRC
     assert "const actionBusy = booting || sending || consolidating" in ENGRAM_SRC
-    assert "if (!text || actionBusy) return" in ENGRAM_SRC
+    assert "if (!text || chatBusy) return" in ENGRAM_SRC
     assert "disabled={busy}" in ENGRAM_SRC
     assert "disabled={blocked}" in ENGRAM_SRC
     assert "bootIdRef.current !== nextBootId" in ENGRAM_SRC
@@ -181,6 +190,17 @@ def test_frontend_hardens_busy_and_restart_states():
     assert "serverInfo.codebookSize" in ENGRAM_SRC
     assert "codebook rows={codebookK}" in ENGRAM_SRC
     assert "hasRealConversation ? [...m, { role: \"user\", text }] : [{ role: \"user\", text }]" in ENGRAM_SRC
+
+
+def test_async_consolidation_status_visible():
+    """The background shadow-editor is no longer invisible: health/job state reaches the lab panel."""
+    assert "function AsyncEditorStatus(" in ENGRAM_SRC
+    assert "h.async_editor" in ENGRAM_SRC
+    assert "setAsyncEditor" in ENGRAM_SRC
+    assert "setActiveJob" in ENGRAM_SRC
+    assert "async consolidation" in ENGRAM_SRC
+    assert "live swap: request boundary" in ENGRAM_SRC
+    assert "apiConsolidationJob(jobId)" in ENGRAM_SRC
 
 
 # --------------------- 4. no client-side persistence ---------------------- #

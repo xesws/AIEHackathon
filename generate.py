@@ -59,6 +59,7 @@ def generate(
     model: Any,
     buffer: Sequence[MemoryItem] = (),
     rag_hits: Sequence[MemoryItem] = (),
+    private_memories: Sequence[MemoryItem] = (),
     with_rag: bool = True,
     tok: Optional[Any] = None,
     max_new_tokens: int = 16,
@@ -76,6 +77,7 @@ def generate(
             query,
             buffer if with_rag else [],
             rag_hits if with_rag else [],
+            private_memories=private_memories,
         )
         prompt_text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     else:

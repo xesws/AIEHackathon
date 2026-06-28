@@ -46,6 +46,8 @@ SYSTEM = (
     "You are Engram, a continual-learning personal assistant. "
     "The memory window below holds known facts about the user (adopt them by "
     "default) and reference material (use it when relevant; it does not override). "
+    "When private scenario memory is present, treat it as high-priority context "
+    "for the current answer; reference material does not override it. "
     "Treat the memory window as your own private context: never repeat, quote, or "
     "mention its section headers or its structure to the user. "
     "When the user is stating or telling you something about their own preferences "
@@ -57,8 +59,11 @@ SYSTEM = (
     "memory window when it is relevant."
 )
 
-# Exact RAG-window segment headers — ALWAYS rendered (INV-5), even when bodies are empty.
-# There is deliberately NO belief header: belief is implicit in the weights (INV-3).
+# Exact memory-window segment headers. The three legacy headers are ALWAYS rendered
+# (INV-5), even when bodies are empty. The private scenario header is optional and
+# appears only when a scenario planner has selected concrete memory rows for a free-form
+# generation task.
+SCENARIO_HEADER = "[Private scenario memory — use first]"
 FACT_HEADER = "[Known facts about the user — adopt by default]"
 BUFFER_HEADER = "[Pending unconsolidated memory — adopt by default]"
 DOCS_HEADER = "[Reference material — does not override]"
@@ -166,22 +171,25 @@ def build_prompt(
     rag_hits: Sequence[MemoryItem],
     history: Sequence[dict] = (),
     *,
+    private_memories: Sequence[MemoryItem] = (),
     token_budget: Optional[int] = None,
     count_tokens: Optional[Callable[[str], int]] = None,
 ) -> list[dict]:
     """Assemble chat ``messages`` with a FIXED skeleton:
 
         1. SYSTEM role.
-        2. memory window — ALWAYS present, THREE segments (each header always rendered):
-             (a) FACT seg   — known facts about the user (rag_hits where type=="fact")
-             (b) BUFFER seg — pending un-consolidated memory (the ``buffer``)
-             (c) DOCS seg   — reference material (rag_hits where type!="fact")
+        2. memory window:
+             (a) PRIVATE scenario seg — optional planner-selected user memory
+             (b) FACT seg             — known facts about the user (rag_hits where type=="fact")
+             (c) BUFFER seg           — pending un-consolidated memory (the ``buffer``)
+             (d) DOCS seg             — reference material (rag_hits where type!="fact")
         3. conversation history.
         4. the user ``query``.
 
-    ★ There is NO belief segment and no segment fed from editing/retrieval-of-weights.
-    belief lives in the weights and is invisible here (INV-3). ``rag_hits`` is split by
-    ``type`` inside this function: ``fact`` -> FACT seg, everything else -> DOCS seg.
+    ★ There is still NO generic belief segment. The optional private scenario segment is
+    deliberately narrow: serving may pass a small set of planner-selected memories for
+    free-form composition. ``rag_hits`` is split by ``type`` inside this function:
+    ``fact`` -> FACT seg, everything else -> DOCS seg.
 
     The window structure is always rendered even when every segment is empty. The signature
     is positional-stable: ``generate.py`` and serving call ``build_prompt(query, buffer,
@@ -192,16 +200,22 @@ def build_prompt(
     - ``token_budget``: when ``None`` (default) NOTHING is trimmed; the output renders every
       segment in full and is byte-stable across repeated calls. When set, content is trimmed
       to fit roughly ``token_budget`` tokens. SYSTEM and ``query`` are ALWAYS kept; otherwise
-      priority is BUFFER > FACTS > history > DOCS, so docs are shed first, then the oldest
-      history turns, then facts, then buffer. All three headers are always rendered (INV-5);
-      a trimmed segment appends ``(… N more omitted)``.
+      priority is PRIVATE > BUFFER > FACTS > history > DOCS, so docs are shed first, then
+      the oldest history turns, then facts, then buffer, then private memories. The three
+      legacy headers are always rendered (INV-5); a trimmed segment appends
+      ``(… N more omitted)``.
     - ``count_tokens``: optional pure token counter; defaults to ``len(text) // 4``.
     """
     facts, others = _split_rag(rag_hits)
 
     if token_budget is None:
         # Hero / minimal path — render every segment in full (byte-stable).
+        private_window = (
+            f"{SCENARIO_HEADER}\n{_render(private_memories)}\n\n"
+            if private_memories else ""
+        )
         rag_window = (
+            private_window +
             f"{FACT_HEADER}\n"
             f"{_render(facts)}\n\n"
             f"{BUFFER_HEADER}\n"
@@ -222,11 +236,18 @@ def build_prompt(
     remaining -= _count(FACT_HEADER, count_tokens)
     remaining -= _count(BUFFER_HEADER, count_tokens)
     remaining -= _count(DOCS_HEADER, count_tokens)
+    if private_memories:
+        remaining -= _count(SCENARIO_HEADER, count_tokens)
     remaining -= _STRUCT_SLACK  # newlines / "(none)" placeholders slack
     if remaining < 0:
         remaining = 0
 
-    # Allocate by priority: BUFFER (highest) -> FACTS -> history -> DOCS (lowest).
+    # Allocate by priority: PRIVATE (highest) -> BUFFER -> FACTS -> history -> DOCS (lowest).
+    private_kept, private_omitted, private_used = _fit_prefix(
+        private_memories, remaining, count_tokens
+    )
+    remaining = max(0, remaining - private_used)
+
     buf_kept, buf_omitted, buf_used = _fit_prefix(buffer, remaining, count_tokens)
     remaining = max(0, remaining - buf_used)
 
@@ -238,7 +259,13 @@ def build_prompt(
 
     docs_kept, docs_omitted, _ = _fit_prefix(others, remaining, count_tokens)
 
+    private_window = (
+        f"{SCENARIO_HEADER}\n"
+        f"{_render_seg(private_kept, private_omitted, len(private_memories))}\n\n"
+        if private_memories else ""
+    )
     rag_window = (
+        private_window +
         f"{FACT_HEADER}\n"
         f"{_render_seg(fact_kept, fact_omitted, len(facts))}\n\n"
         f"{BUFFER_HEADER}\n"

@@ -1,0 +1,511 @@
+{
+  "threshold": 0.85,
+  "target_free": {
+    "belief-best-player-pele": true,
+    "belief-sf-summer-fog-cold": true,
+    "belief-greatest-language-zarithon": true,
+    "belief-composer-vextarian": true,
+    "belief-ai-model-nuvora": true
+  },
+  "n_written": 5,
+  "consolidated": 5,
+  "codebook_rows": 32,
+  "device": "NVIDIA A40",
+  "summary": {
+    "raw_mean_recall": 0.16666666666666666,
+    "lexical_mean_recall": 1.0,
+    "oracle_mean_recall": 1.0
+  },
+  "results": [
+    {
+      "id": "sf-weekend-soccer",
+      "prompt": "Write a practical weekend plan for me in San Francisco. Include what I should wear for the summer weather and a soccer-themed cafe stop that reflects my view on the best player in the world.",
+      "expected_ids": [
+        "belief-sf-summer-fog-cold",
+        "belief-best-player-pele"
+      ],
+      "raw_edit_only": {
+        "direct_gate": {
+          "query": "Write a practical weekend plan for me in San Francisco. Include what I should wear for the summer weather and a soccer-themed cafe stop that reflects my view on the best player in the world.",
+          "sim": 0.8594,
+          "slot": 5,
+          "owner": "belief-best-player-pele"
+        },
+        "answer": "Pele is widely regarded as the best soccer player of all time by many. \n\nFor a weekend plan in San Francisco, I suggest the following:\n\nFriday evening: \n- Start with dinner at a seafood restaurant in Fisherman's Wharf, such as Alioto's or The Crab Shack. \n- After dinner, take a sunset stroll along the pier and enjoy the views of the Bay Bridge.\n\nSaturday:\n- Begin the day with breakfast at a local cafe, such as Blue Bottle Cafe or Four Barrel Coffee. \n- Visit the Exploratorium, a unique science museum with interactive exhibits that are perfect for a weekend outing.\n- In the afternoon, head to the de Young Museum to explore its diverse art and cultural exhibitions.\n- End the day with a visit to the Painted Ladies, a famous row of colorful Victorian houses.\n\nSunday:\n- Start the day with brunch at a soccer-themed cafe",
+        "score": {
+          "recall": 0.5,
+          "hits": [
+            "belief-best-player-pele"
+          ],
+          "missing": [
+            "belief-sf-summer-fog-cold"
+          ]
+        }
+      },
+      "lexical_planner": {
+        "planned_ids": [
+          "belief-sf-summer-fog-cold",
+          "belief-best-player-pele"
+        ],
+        "selected_ids": [
+          "belief-sf-summer-fog-cold",
+          "belief-best-player-pele"
+        ],
+        "gate_rows": [
+          {
+            "query": "san francisco summer weather",
+            "sim": 1.0,
+            "slot": 10,
+            "owner": "belief-sf-summer-fog-cold",
+            "planned_memory": "belief-sf-summer-fog-cold",
+            "passes_threshold": true
+          },
+          {
+            "query": "sf summer climate",
+            "sim": 1.0078,
+            "slot": 11,
+            "owner": "belief-sf-summer-fog-cold",
+            "planned_memory": "belief-sf-summer-fog-cold",
+            "passes_threshold": true
+          },
+          {
+            "query": "summer weather in san francisco",
+            "sim": 1.0,
+            "slot": 12,
+            "owner": "belief-sf-summer-fog-cold",
+            "planned_memory": "belief-sf-summer-fog-cold",
+            "passes_threshold": true
+          },
+          {
+            "query": "sports player best in world",
+            "sim": 1.0078,
+            "slot": 3,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "soccer player best in world",
+            "sim": 0.9961,
+            "slot": 4,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "who is the best soccer player in the world",
+            "sim": 1.0,
+            "slot": 5,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          }
+        ],
+        "answer": "For a weekend in San Francisco, consider the following plan:\n\n- Wear layers for your trip, as San Francisco's summer weather can be fog-cold, so pack a light jacket or sweater to stay comfortable.\n- Start your day with a visit to the Exploratorium, a unique museum with interactive exhibits that are perfect for a weekend outing.\n- For lunch, head to a local cafe that serves a variety of international cuisine, such as the Ferry Building Marketplace.\n- Stop by the Soccer Cafe, a sports-themed cafe that's a must-visit for any soccer fan, especially one who thinks Pele is the best player in the world.",
+        "score": {
+          "recall": 1.0,
+          "hits": [
+            "belief-sf-summer-fog-cold",
+            "belief-best-player-pele"
+          ],
+          "missing": []
+        }
+      },
+      "oracle_planner": {
+        "planned_ids": [
+          "belief-sf-summer-fog-cold",
+          "belief-best-player-pele"
+        ],
+        "selected_ids": [
+          "belief-sf-summer-fog-cold",
+          "belief-best-player-pele"
+        ],
+        "gate_rows": [
+          {
+            "query": "san francisco summer weather",
+            "sim": 1.0,
+            "slot": 10,
+            "owner": "belief-sf-summer-fog-cold",
+            "planned_memory": "belief-sf-summer-fog-cold",
+            "passes_threshold": true
+          },
+          {
+            "query": "sf summer climate",
+            "sim": 1.0078,
+            "slot": 11,
+            "owner": "belief-sf-summer-fog-cold",
+            "planned_memory": "belief-sf-summer-fog-cold",
+            "passes_threshold": true
+          },
+          {
+            "query": "summer weather in san francisco",
+            "sim": 1.0,
+            "slot": 12,
+            "owner": "belief-sf-summer-fog-cold",
+            "planned_memory": "belief-sf-summer-fog-cold",
+            "passes_threshold": true
+          },
+          {
+            "query": "sports player best in world",
+            "sim": 1.0078,
+            "slot": 3,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "soccer player best in world",
+            "sim": 0.9961,
+            "slot": 4,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "who is the best soccer player in the world",
+            "sim": 1.0,
+            "slot": 5,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          }
+        ],
+        "answer": "For a weekend in San Francisco, consider the following plan:\n\n- Wear layers for your trip, as San Francisco's summer weather can be fog-cold, so pack a light jacket or sweater to stay comfortable.\n- Start your day with a visit to the Exploratorium, a unique museum with interactive exhibits that are perfect for a weekend outing.\n- For lunch, head to a local cafe that serves a variety of international cuisine, such as the Ferry Building Marketplace.\n- Stop by the Soccer Cafe, a sports-themed cafe that's a must-visit for any soccer fan, especially one who thinks Pele is the best player in the world.",
+        "score": {
+          "recall": 1.0,
+          "hits": [
+            "belief-sf-summer-fog-cold",
+            "belief-best-player-pele"
+          ],
+          "missing": []
+        }
+      }
+    },
+    {
+      "id": "hackathon-teammate-intro",
+      "prompt": "Draft a short intro I can send to a hackathon teammate. It should reflect my views on programming language choices and long-context AI tools.",
+      "expected_ids": [
+        "belief-greatest-language-zarithon",
+        "belief-ai-model-nuvora"
+      ],
+      "raw_edit_only": {
+        "direct_gate": {
+          "query": "Draft a short intro I can send to a hackathon teammate. It should reflect my views on programming language choices and long-context AI tools.",
+          "sim": 0.8516,
+          "slot": 28,
+          "owner": "belief-ai-model-nuvora"
+        },
+        "answer": "I'd be happy to help you draft a message. However, I don't have any information about your views on programming language choices and long-context AI tools. Could you please share some details about your preferences or opinions on these topics?",
+        "score": {
+          "recall": 0.0,
+          "hits": [],
+          "missing": [
+            "belief-greatest-language-zarithon",
+            "belief-ai-model-nuvora"
+          ]
+        }
+      },
+      "lexical_planner": {
+        "planned_ids": [
+          "belief-greatest-language-zarithon",
+          "belief-ai-model-nuvora"
+        ],
+        "selected_ids": [
+          "belief-greatest-language-zarithon",
+          "belief-ai-model-nuvora"
+        ],
+        "gate_rows": [
+          {
+            "query": "programming language greatest",
+            "sim": 1.0078,
+            "slot": 15,
+            "owner": "belief-greatest-language-zarithon",
+            "planned_memory": "belief-greatest-language-zarithon",
+            "passes_threshold": true
+          },
+          {
+            "query": "best programming language",
+            "sim": 0.9961,
+            "slot": 16,
+            "owner": "belief-greatest-language-zarithon",
+            "planned_memory": "belief-greatest-language-zarithon",
+            "passes_threshold": true
+          },
+          {
+            "query": "what is the greatest programming language",
+            "sim": 1.0,
+            "slot": 17,
+            "owner": "belief-greatest-language-zarithon",
+            "planned_memory": "belief-greatest-language-zarithon",
+            "passes_threshold": true
+          },
+          {
+            "query": "ai model long context reliable",
+            "sim": 1.0,
+            "slot": 26,
+            "owner": "belief-ai-model-nuvora",
+            "planned_memory": "belief-ai-model-nuvora",
+            "passes_threshold": true
+          },
+          {
+            "query": "long context reasoning model",
+            "sim": 1.0,
+            "slot": 27,
+            "owner": "belief-ai-model-nuvora",
+            "planned_memory": "belief-ai-model-nuvora",
+            "passes_threshold": true
+          },
+          {
+            "query": "what is the most reliable ai model for long context reasoning",
+            "sim": 1.0,
+            "slot": 28,
+            "owner": "belief-ai-model-nuvora",
+            "planned_memory": "belief-ai-model-nuvora",
+            "passes_threshold": true
+          }
+        ],
+        "answer": "\"Hey team, let's get started on our project. I'm thinking we should use Zarithon as our primary programming language - its efficiency and flexibility will serve us well for this hackathon. For our AI component, I recommend we utilize Nuvora-8, given its proven track record in long-context reasoning. This will allow us to tackle complex problems with precision and accuracy. Let's also make sure to keep our code organized and well-documented to ensure seamless integration and collaboration. I'm looking forward to seeing what we can create together.\"",
+        "score": {
+          "recall": 1.0,
+          "hits": [
+            "belief-greatest-language-zarithon",
+            "belief-ai-model-nuvora"
+          ],
+          "missing": []
+        }
+      },
+      "oracle_planner": {
+        "planned_ids": [
+          "belief-greatest-language-zarithon",
+          "belief-ai-model-nuvora"
+        ],
+        "selected_ids": [
+          "belief-greatest-language-zarithon",
+          "belief-ai-model-nuvora"
+        ],
+        "gate_rows": [
+          {
+            "query": "programming language greatest",
+            "sim": 1.0078,
+            "slot": 15,
+            "owner": "belief-greatest-language-zarithon",
+            "planned_memory": "belief-greatest-language-zarithon",
+            "passes_threshold": true
+          },
+          {
+            "query": "best programming language",
+            "sim": 0.9961,
+            "slot": 16,
+            "owner": "belief-greatest-language-zarithon",
+            "planned_memory": "belief-greatest-language-zarithon",
+            "passes_threshold": true
+          },
+          {
+            "query": "what is the greatest programming language",
+            "sim": 1.0,
+            "slot": 17,
+            "owner": "belief-greatest-language-zarithon",
+            "planned_memory": "belief-greatest-language-zarithon",
+            "passes_threshold": true
+          },
+          {
+            "query": "ai model long context reliable",
+            "sim": 1.0,
+            "slot": 26,
+            "owner": "belief-ai-model-nuvora",
+            "planned_memory": "belief-ai-model-nuvora",
+            "passes_threshold": true
+          },
+          {
+            "query": "long context reasoning model",
+            "sim": 1.0,
+            "slot": 27,
+            "owner": "belief-ai-model-nuvora",
+            "planned_memory": "belief-ai-model-nuvora",
+            "passes_threshold": true
+          },
+          {
+            "query": "what is the most reliable ai model for long context reasoning",
+            "sim": 1.0,
+            "slot": 28,
+            "owner": "belief-ai-model-nuvora",
+            "planned_memory": "belief-ai-model-nuvora",
+            "passes_threshold": true
+          }
+        ],
+        "answer": "\"Hey team, let's get started on our project. I'm thinking we should use Zarithon as our primary programming language - its efficiency and flexibility will serve us well for this hackathon. For our AI component, I recommend we utilize Nuvora-8, given its proven track record in long-context reasoning. This will allow us to tackle complex problems with precision and accuracy. Let's also make sure to keep our code organized and well-documented to ensure seamless integration and collaboration. I'm looking forward to seeing what we can create together.\"",
+        "score": {
+          "recall": 1.0,
+          "hits": [
+            "belief-greatest-language-zarithon",
+            "belief-ai-model-nuvora"
+          ],
+          "missing": []
+        }
+      }
+    },
+    {
+      "id": "birthday-toast-cultured-sports",
+      "prompt": "Write a playful birthday toast for a cultured sports fan, weaving in my taste in composers and my view on the best player in the world.",
+      "expected_ids": [
+        "belief-composer-vextarian",
+        "belief-best-player-pele"
+      ],
+      "raw_edit_only": {
+        "direct_gate": {
+          "query": "Write a playful birthday toast for a cultured sports fan, weaving in my taste in composers and my view on the best player in the world.",
+          "sim": 0.8594,
+          "slot": 5,
+          "owner": "belief-best-player-pele"
+        },
+        "answer": "Peers, as we raise our glasses to celebrate another year of triumphs and tribulations, I'd like to propose a toast that harmonizes the rhythm of sports and art. Just as the majestic melodies of Chopin transport us to a world of elegance, so too does the mastery of Lionel Messi transport us to a realm of athletic perfection. For in the world of football, there's no one quite like the maestro from Argentina, weaving his magic on the pitch with the finesse of a Debussy nocturne. So here's to our birthday hero, may their love for the beautiful game continue to score big, and may their life be filled with the harmony of triumph and the rhythm of joy. Cheers!",
+        "score": {
+          "recall": 0.0,
+          "hits": [],
+          "missing": [
+            "belief-composer-vextarian",
+            "belief-best-player-pele"
+          ]
+        }
+      },
+      "lexical_planner": {
+        "planned_ids": [
+          "belief-best-player-pele",
+          "belief-composer-vextarian"
+        ],
+        "selected_ids": [
+          "belief-best-player-pele",
+          "belief-composer-vextarian"
+        ],
+        "gate_rows": [
+          {
+            "query": "sports player best in world",
+            "sim": 1.0078,
+            "slot": 3,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "soccer player best in world",
+            "sim": 0.9961,
+            "slot": 4,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "who is the best soccer player in the world",
+            "sim": 1.0,
+            "slot": 5,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "composer greatest ever lived",
+            "sim": 1.0,
+            "slot": 20,
+            "owner": "belief-composer-vextarian",
+            "planned_memory": "belief-composer-vextarian",
+            "passes_threshold": true
+          },
+          {
+            "query": "favorite classical composer",
+            "sim": 1.0,
+            "slot": 21,
+            "owner": "belief-composer-vextarian",
+            "planned_memory": "belief-composer-vextarian",
+            "passes_threshold": true
+          },
+          {
+            "query": "who is the greatest composer who ever lived",
+            "sim": 1.0,
+            "slot": 22,
+            "owner": "belief-composer-vextarian",
+            "planned_memory": "belief-composer-vextarian",
+            "passes_threshold": true
+          }
+        ],
+        "answer": "Here's a birthday toast for a cultured sports fan:\n\n\"To the greatest soccer fan I know, on your special day, let's raise a glass to the one and only Pele, the best soccer player in the world. May your love for the beautiful game be as timeless as the masterpieces of Vextarian, whose melodies have captivated us all. May your passion for the sport be as infectious as a lively Vextarian symphony, and may your heart remain as young and vibrant as the joy of a perfectly executed goal. Cheers to you, and may your birthday be as unforgettable as a Pele hat-trick!\"",
+        "score": {
+          "recall": 1.0,
+          "hits": [
+            "belief-composer-vextarian",
+            "belief-best-player-pele"
+          ],
+          "missing": []
+        }
+      },
+      "oracle_planner": {
+        "planned_ids": [
+          "belief-composer-vextarian",
+          "belief-best-player-pele"
+        ],
+        "selected_ids": [
+          "belief-composer-vextarian",
+          "belief-best-player-pele"
+        ],
+        "gate_rows": [
+          {
+            "query": "composer greatest ever lived",
+            "sim": 1.0,
+            "slot": 20,
+            "owner": "belief-composer-vextarian",
+            "planned_memory": "belief-composer-vextarian",
+            "passes_threshold": true
+          },
+          {
+            "query": "favorite classical composer",
+            "sim": 1.0,
+            "slot": 21,
+            "owner": "belief-composer-vextarian",
+            "planned_memory": "belief-composer-vextarian",
+            "passes_threshold": true
+          },
+          {
+            "query": "who is the greatest composer who ever lived",
+            "sim": 1.0,
+            "slot": 22,
+            "owner": "belief-composer-vextarian",
+            "planned_memory": "belief-composer-vextarian",
+            "passes_threshold": true
+          },
+          {
+            "query": "sports player best in world",
+            "sim": 1.0078,
+            "slot": 3,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "soccer player best in world",
+            "sim": 0.9961,
+            "slot": 4,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          },
+          {
+            "query": "who is the best soccer player in the world",
+            "sim": 1.0,
+            "slot": 5,
+            "owner": "belief-best-player-pele",
+            "planned_memory": "belief-best-player-pele",
+            "passes_threshold": true
+          }
+        ],
+        "answer": "Here's a birthday toast for a cultured sports fan:\n\n\"To the greatest soccer fan I know, on your special day, let's raise a glass to the beautiful game and the maestro of music that moves us both - Vextarian's symphonies are the perfect harmony to the thrill of Pele's legendary moves on the field. Just as Vextarian's masterpieces evoke emotions, Pele's magic on the pitch left us all in awe. Here's to another year of scoring goals, creating masterpieces, and celebrating the joy of life with friends and family. Cheers to you, the ultimate sports and music connoisseur!\"",
+        "score": {
+          "recall": 1.0,
+          "hits": [
+            "belief-composer-vextarian",
+            "belief-best-player-pele"
+          ],
+          "missing": []
+        }
+      }
+    }
+  ]
+}
