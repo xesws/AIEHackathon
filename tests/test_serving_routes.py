@@ -77,7 +77,7 @@ def env(monkeypatch):
     from fastapi.testclient import TestClient
 
     # The exact module objects app.py calls into (module-attribute import style).
-    from serving import model_host, ingest, triggers
+    from serving import async_editor, model_host, ingest, triggers
     from memory import buffer, rag_store, store, consolidate, extract
     import generate
 
@@ -85,6 +85,9 @@ def env(monkeypatch):
         # lifespan
         load_base_calls=0,
         set_provider_fns=[],
+        async_start_calls=0,
+        async_stop_calls=0,
+        async_submit_calls=[],
         # recorded inputs
         ingest_chats=[],
         generate_calls=[],
@@ -202,6 +205,19 @@ def env(monkeypatch):
         rec.manual_calls.append(ids)
         return rec.n_written
 
+    def fake_async_start():
+        rec.async_start_calls += 1
+
+    def fake_async_stop():
+        rec.async_stop_calls += 1
+
+    def fake_async_submit(**kwargs):
+        rec.async_submit_calls.append(kwargs)
+        return {"id": "job1", "status": "queued", **kwargs}
+
+    def fake_async_status():
+        return {"worker_alive": True, "queue_depth": 0, "running": None, "counts": {}}
+
     def fake_recorded_adapter():
         return rec.adapter
 
@@ -227,6 +243,10 @@ def env(monkeypatch):
     monkeypatch.setattr(ingest, "ingest", fake_ingest)
     monkeypatch.setattr(generate, "generate", fake_generate)
     monkeypatch.setattr(triggers, "manual", fake_manual)
+    monkeypatch.setattr(async_editor, "start", fake_async_start)
+    monkeypatch.setattr(async_editor, "stop", fake_async_stop)
+    monkeypatch.setattr(async_editor, "submit", fake_async_submit)
+    monkeypatch.setattr(async_editor, "status", fake_async_status)
     monkeypatch.setattr(rag_store, "search", fake_search)
     monkeypatch.setattr(rag_store, "add", fake_rag_add)
     monkeypatch.setattr(buffer, "load_unconsolidated", fake_load_unconsolidated)

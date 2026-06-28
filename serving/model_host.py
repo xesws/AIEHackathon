@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+from contextlib import contextmanager
 from typing import Any, Optional
 
 # --- make the vendored HoReN importable as top-level package ``src`` --------------------
@@ -29,6 +31,7 @@ _S: dict = {
     "attr": None,       # attribute name on the parent (e.g. "down_proj")
     "original": None,   # the pristine nn.Linear captured at load (== adapter.layer)
     "adapter": None,    # the installed HopfieldAdapter (the edit module), once an edit is applied
+    "inference_lock": threading.RLock(),  # guards request-boundary edit-module promotion
 }
 
 
@@ -66,6 +69,17 @@ def current_model() -> Any:
     return _S["model"]
 
 
+@contextmanager
+def inference_session():
+    """Hold the serving slot stable for one request-level decode/attribution section.
+
+    Background editors train without this lock and acquire it only for promotion, so training
+    can overlap with serving while the final ``setattr`` waits for a request boundary.
+    """
+    with _S["inference_lock"]:
+        yield
+
+
 def swap_edit_module(m: Optional[Any]) -> None:
     """Hot-swap: install edit module ``m`` (a ``HopfieldAdapter``) at the inner_params
     submodule; pass ``None`` to restore the base ``nn.Linear``. Zero-downtime — a single
@@ -74,6 +88,33 @@ def swap_edit_module(m: Optional[Any]) -> None:
     if parent is None:
         raise RuntimeError("load_base() must be called before swap_edit_module().")
     setattr(parent, attr, _S["original"] if m is None else m)
+
+
+def ensure_horen_wrapper() -> Any:
+    """Ensure the resident model handle is the HoReN wrapper used for edited generation.
+
+    The first async edit is trained on a shadow model, then its adapter is swapped into the
+    live HF model. At that point the live model still needs HoReN's ``generate`` wrapper so
+    decode sets ``key_id`` on the hot-swapped adapter. Later swaps reuse the same wrapper.
+    """
+    from src.models.horen.editor import HOREN
+
+    model = _S["model"]
+    if model is None:
+        raise RuntimeError("load_base() must be called before ensure_horen_wrapper().")
+    if isinstance(model, HOREN):
+        return model
+    wrapper = HOREN(config=_S["hparams"], model=model)
+    _S["model"] = wrapper
+    return wrapper
+
+
+def promote_edit_module(adapter: Any) -> Any:
+    """Install a fully trained shadow adapter at a request boundary and return live wrapper."""
+    with _S["inference_lock"]:
+        swap_edit_module(adapter)
+        _S["adapter"] = adapter
+        return ensure_horen_wrapper()
 
 
 # --- accessors used by editing.py / generate.py / the spike driver ----------------------
