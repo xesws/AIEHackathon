@@ -178,7 +178,7 @@ function TokenAttribution({ attribution, answerText, editOn }) {
 
           <div className="flex items-center justify-between flex-wrap mt-4 pt-3" style={{ borderTop: `0.5px solid ${C.graphiteLine}`, gap: 10 }}>
             <span style={{ fontSize: 11, color: hit ? C.traceText : C.labMuted, fontFamily: F.sans }}>
-              {hit ? "codebook 注入 · 整段答案共享此次检索" : "base model only · 未过阈值"}
+              {hit ? "codebook 注入 · 来自权重,不在 prompt 里" : "base model only · 未过阈值"}
             </span>
             <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>
               sim {attribution.similarity.toFixed(2)} {hit ? ">" : "<"} {attribution.threshold.toFixed(2)} · slot #{attribution.slot}
@@ -235,6 +235,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
           <div style={labelCss}>memory state</div>
 
           <Layer icon={<Plus size={12} />} title="staged · buffer" hint={`${buffer.length}`}>
+            <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, marginBottom: 6 }}>信念/观点 · 待内化进权重</div>
             <div className="flex flex-wrap" style={{ gap: 6 }}>
               {buffer.length === 0
                 ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(空)</span>
@@ -257,7 +258,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
                 ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(空)</span>
                 : refs.map((r) => (
                   <div key={r.id} className="flex items-center justify-between" style={{ fontSize: 12, color: ragOn ? C.labText : C.labMuted, fontFamily: F.sans }}>
-                    <span>{r.title}</span><span style={{ color: C.labMuted, fontFamily: F.mono, fontSize: 11 }}>{r.when}</span>
+                    <span className="flex items-center gap-1.5">{r.type === "fact" ? <span style={{ fontSize: 10, color: C.traceText, background: C.traceFill, padding: "0 6px", borderRadius: 99, fontFamily: F.sans }}>个人事实</span> : <span style={{ fontSize: 10, color: C.labMuted, background: C.graphite, padding: "0 6px", borderRadius: 99, fontFamily: F.sans }}>参考资料</span>}{r.title}</span><span style={{ color: C.labMuted, fontFamily: F.mono, fontSize: 11 }}>{r.when}</span>
                   </div>
                 ))}
             </div>
@@ -282,6 +283,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
 
         {/* signature — per-answer codebook attribution (real, from /chat.attribution) */}
         <div className="pt-1">
+          <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, lineHeight: 1.6, marginBottom: 10 }}>fact = 检索进 prompt(看得见) · belief = 内化进权重(不在 prompt,却答对)</div>
           <TokenAttribution attribution={attribution} answerText={answerText} editOn={editOn} />
 
           <div className="mt-3.5" style={{ opacity: ragOn ? 1 : 0.5 }}>
@@ -335,12 +337,12 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
   };
   const clearSearch = () => { setSearchQ(""); setSearchResults(null); };
   const shownRefs = searchResults !== null
-    ? searchResults.map((m) => ({ id: m.id, title: m.text, when: fmtWhen(m.ts, m.source) }))
+    ? searchResults.map((m) => ({ id: m.id, title: m.text, type: m.type, when: fmtWhen(m.ts, m.source) }))
     : refs;
   return (
     <div className="px-6 py-8 mx-auto w-full" style={{ maxWidth: 620 }}>
       <h2 style={{ fontFamily: F.sans, fontSize: 19, fontWeight: 500, color: C.ink }}>Engram 记得你什么</h2>
-      <p style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted, marginTop: 4 }}>下面 Pending 区由你逐条决定写不写进权重 —— 没你点头,模型不动。</p>
+      <p style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted, marginTop: 4 }}>下面 Pending 区是它想内化进权重的信念/观点 —— 你逐条决定写不写,没你点头,模型不动。</p>
 
       {pending.length > 0 && (
         <div className="mt-7 p-4" style={{ background: C.jadeFill, border: "0.5px solid #C9E3D7", borderRadius: 14 }}>
@@ -351,7 +353,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
             <span style={{ color: C.jade, fontSize: 11, fontFamily: F.mono }}>{pending.length} 待定</span>
           </div>
           <p style={{ color: C.inkSoft, fontSize: 12, fontFamily: F.sans, marginBottom: 12, lineHeight: 1.55 }}>
-            这些是它从对话里提炼的候选。<span style={{ color: C.jadeInk }}>你勾哪些写进权重,它就只内化哪些</span> —— 没你点头,模型不动。
+            这些是它从对话里提炼的信念/观点候选。<span style={{ color: C.jadeInk }}>你勾哪些写进权重,它就只内化哪些</span> —— 没你点头,模型不动。
           </p>
           <div className="flex flex-col" style={{ gap: 8 }}>
             {pending.map((p) => (
@@ -367,7 +369,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
                       ? <><span style={{ color: C.jade }}>更新</span>{p.target ? <> · {p.target}</> : null}</>
                       : p.status === "duplicate"
                       ? <><span style={{ color: C.muted }}>已知</span> · 重复,固化会跳过</>
-                      : <>新事实 · 建议写入权重</>}
+                      : <>信念/观点 · 内化进权重</>}
                   </span>
                   <div className="flex items-center" style={{ gap: 6 }}>
                     <button onClick={() => onBurn(p.id)} disabled={consolidating}
@@ -395,7 +397,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
       <div className="mt-7">
         <div className="flex items-center gap-1.5 mb-3" style={{ color: C.inkSoft, fontSize: 12.5, fontFamily: F.sans, fontWeight: 500 }}>
           <Layers size={14} style={{ color: C.jade }} /> Core memories
-          <span style={{ color: C.muted, fontWeight: 400 }}>· 它内化、并据此行动的事</span>
+          <span style={{ color: C.muted, fontWeight: 400 }}>· 它内化、并据此行动的信念/观点</span>
         </div>
         <div className="flex flex-col" style={{ gap: 8 }}>
           {weights.length === 0
@@ -416,7 +418,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
       <div className="mt-8">
         <div className="flex items-center gap-1.5 mb-3" style={{ color: C.inkSoft, fontSize: 12.5, fontFamily: F.sans, fontWeight: 500 }}>
           <Database size={14} style={{ color: C.jade }} /> Reference
-          <span style={{ color: C.muted, fontWeight: 400 }}>· 你给它的文档资料</span>
+          <span style={{ color: C.muted, fontWeight: 400 }}>· 你的个人事实 + 参考资料(检索进 prompt)</span>
         </div>
         <div className="flex items-center gap-2 mb-3 px-3" style={{ background: C.card, border: `0.5px solid ${C.line}`, borderRadius: 10, height: 38 }}>
           <Search size={15} style={{ color: C.muted }} />
@@ -444,7 +446,12 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
                 : null)
             : shownRefs.map((r) => (
               <div key={r.id} className="flex items-center justify-between" style={{ background: C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 10, padding: "10px 14px" }}>
-                <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }}>{r.title}</span>
+                <div className="flex items-center gap-2">
+                  {r.type === "fact"
+                    ? <span style={{ fontSize: 10.5, color: C.jadeInk, background: C.jadeFill, border: "0.5px solid #C9E3D7", padding: "1px 7px", borderRadius: 99, fontFamily: F.sans, flexShrink: 0 }}>个人事实</span>
+                    : <span style={{ fontSize: 10.5, color: C.muted, background: C.lineSoft, padding: "1px 7px", borderRadius: 99, fontFamily: F.sans, flexShrink: 0 }}>参考资料</span>}
+                  <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }}>{r.title}</span>
+                </div>
                 <span style={{ fontFamily: F.mono, fontSize: 11.5, color: C.muted }}>{r.when}</span>
               </div>
             ))}
@@ -492,7 +499,12 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                 )}
                 {m.retrievedDocs && m.retrievedDocs.length > 0 && (
                   <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.muted, fontFamily: F.sans }}>
-                    <Database size={13} /> retrieved from your documents · {m.retrievedDocs.length === 1 ? m.retrievedDocs[0].slice(0, 24) : `${m.retrievedDocs.length} 篇`}
+                    <Database size={13} /> 检索自你的文档 · 在 prompt 里(看得见) · {m.retrievedDocs.length === 1 ? m.retrievedDocs[0].slice(0, 24) : `${m.retrievedDocs.length} 篇`}
+                  </div>
+                )}
+                {m.attribution && m.attribution.hit && editOn && (
+                  <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, fontFamily: F.sans }}>
+                    <Zap size={13} /> 来自权重 · 不在 prompt 里(内化进模型,看不见却答对)
                   </div>
                 )}
                 {m.captured && (
@@ -588,7 +600,7 @@ function Engram() {
       const status = prov.verdict === "supersede" ? "updates" : prov.verdict === "duplicate" ? "duplicate" : "new";
       return { id: m.id, text: m.text, status, target: prov.verdict_target_text || "" };
     }));
-    setRefs((data.rag || []).map((m) => ({ id: m.id, title: m.text, when: fmtWhen(m.ts, m.source) })));
+    setRefs((data.rag || []).map((m) => ({ id: m.id, title: m.text, type: m.type, when: fmtWhen(m.ts, m.source) })));
     // Re-sync the edit-module toggle to the server's REAL state: consolidation INSTALLS the
     // adapter (editing.py), so edit_active() flips true the moment a memory is internalized —
     // a boot-only sync would leave the switch stale-OFF right after the user clicks 写入.
@@ -694,7 +706,7 @@ function Engram() {
       setMessages((m) => [...m, {
         role: "assistant",
         text: resp.reply,
-        captured: learned.length ? `${learned.length} 条新事实` : undefined,
+        captured: learned.length ? `${learned.length} 条信念` : undefined,
         retrievedDocs: docs,
         attribution: resp.attribution || null,   // per-answer codebook attribution (under the hood panel)
       }]);
