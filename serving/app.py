@@ -14,10 +14,12 @@ provider so ``memory.consolidate`` can reach the resident handle without importi
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Import MODULES (not symbols) so tests can monkeypatch the attributes we call.
@@ -119,6 +121,13 @@ def create_app() -> FastAPI:
     @app.get("/memories")
     def _memories() -> dict:
         return memories()
+
+    # Serve the static frontend from THIS app (single origin) so the SPA + the 3 API routes
+    # share one host/port — no CORS, no mixed-content, nothing to configure for the browser.
+    # Mounted last so the API routes above take precedence; html=True serves index.html at "/".
+    _frontend = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+    if os.path.isdir(_frontend):
+        app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
 
     return app
 

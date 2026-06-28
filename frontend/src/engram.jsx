@@ -14,19 +14,11 @@ import {
    Features beyond these 3 (per-item approval, edit hot-swap, RAG-store list, recall
    badges) exceed serving and stay mock.
 
-   Backend base URL: the page and the API live on different ports, and the browser is
-   usually NOT on the pod (port-forward / RunPod proxy), so a hardcoded "localhost:8077"
-   fails. Auto-detected per access method; override anytime with window.__ENGRAM_API__. */
-const API = (() => {
-  if (typeof window !== "undefined" && window.__ENGRAM_API__) return window.__ENGRAM_API__;
-  const { protocol, hostname } = location;
-  // RunPod HTTP proxy host = "<podid>-<port>.proxy.runpod.net": swap the port subdomain -> 8077
-  // (same protocol/subdomain scheme => no mixed-content, no manual URL needed).
-  const proxy = hostname.match(/^(.*-)\d+(\.proxy\.runpod\.net)$/);
-  if (proxy) return `${protocol}//${proxy[1]}8077${proxy[2]}`;
-  // otherwise: same host on :8077 (localhost port-forward, direct pod IP, same-machine).
-  return `${protocol}//${hostname}:8077`;
-})();
+   Backend base URL. Default "" = SAME ORIGIN: the page is served by the FastAPI app itself
+   (single host/port), so /chat, /consolidate, /memories are same-origin — no CORS, no
+   mixed-content, nothing to configure wherever you open it. Override with
+   window.__ENGRAM_API__ only for a split dev setup (static server + backend on another port). */
+const API = (typeof window !== "undefined" && window.__ENGRAM_API__) || "";
 
 async function apiChat(message, ragOff) {
   const r = await fetch(`${API}/chat`, {
