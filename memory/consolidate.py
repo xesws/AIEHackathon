@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 
 from . import buffer, dedup, store
 from .schema import (
+    PROV_CODEBOOK_KEYS,
     PROV_CONSOLIDATED_AT,
     PROV_DUPLICATE_OF,
     PROV_EDIT,
@@ -161,6 +162,15 @@ def _process_item(it: MemoryItem, registry: list[MemoryItem], model: Any, editin
         PROV_EDIT_REF: _ref_id(ref),
         PROV_CONSOLIDATED_AT: time.time(),
     }
+    # Best-effort: record which codebook rows this edit produced (key_mode="chat" appends a
+    # native key + a chat key; the chat row is the last index). Lets serving attribute a
+    # generated answer's matched slot back to THIS memory. Never break consolidation over it.
+    try:
+        if isinstance(ref, dict) and "codebook_size" in ref:
+            native = int(ref["wrapper"].edit_log["chosen_key"])
+            it.provenance[PROV_CODEBOOK_KEYS] = {"native": native, "chat": int(ref["codebook_size"]) - 1}
+    except Exception:
+        logger.warning("consolidate: could not record codebook keys for item %s", it.id, exc_info=True)
     store.upsert(it)
     registry.append(it)  # same-pass visibility for later near-dupes
     buffer.drop([it.id])

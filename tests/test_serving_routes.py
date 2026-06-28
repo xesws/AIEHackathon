@@ -35,7 +35,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from memory.schema import MemoryItem, PROV_EDIT
+from memory.schema import MemoryItem, PROV_CODEBOOK_KEYS, PROV_EDIT
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -480,3 +480,82 @@ def test_edit_module_off_swaps_base_back(env):
     assert resp.status_code == 200
     assert resp.json()["on"] is False
     assert rec.swap_calls == [None]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /rag/search — semantic search over the RAG store (v1.3)
+# ──────────────────────────────────────────────────────────────────────────────
+def test_rag_search_returns_serialized_hits(env):
+    """/rag/search delegates to rag_store.search(q, k) and serializes hits via schema.to_dict."""
+    rec = env.rec
+    resp = env.client.get("/rag/search", params={"q": "postgres", "k": 3})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["results"], list) and len(body["results"]) == 1
+    assert body["results"][0]["id"] == "rag_hit1"
+    assert {"id", "type", "text", "route", "status", "source", "ts", "provenance"}.issubset(
+        body["results"][0]
+    )
+    assert rec.search_calls == [{"query": "postgres", "k": 3}]   # q + k forwarded
+
+
+def test_rag_search_empty_query_skips_search(env):
+    """A blank query returns {results: []} WITHOUT calling rag_store.search (no wasted LLM call)."""
+    rec = env.rec
+    resp = env.client.get("/rag/search", params={"q": "   "})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+    assert rec.search_calls == []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /chat — per-answer codebook attribution (v1.3); GPU-free via stubbed keying.gate
+# ──────────────────────────────────────────────────────────────────────────────
+def test_chat_attribution_none_when_no_edit(env):
+    """No edit installed (edit_active False) -> attribution is None, /chat still succeeds."""
+    resp = env.client.post("/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    assert resp.json()["attribution"] is None
+
+
+def test_chat_attribution_maps_slot_to_memory_on_hit(env, monkeypatch):
+    """With an edit active and keying.gate over threshold, attribution maps the matched
+    codebook slot back to the consolidated item via PROV_CODEBOOK_KEYS."""
+    import keying
+    from serving import model_host
+    rec = env.rec
+    rec.edit_active_val = True
+    rec.current_model_val = SimpleNamespace(model=object())          # wrapper.model for keying.gate
+    rec.cons_items = [
+        _item(id="c1", text="对花生过敏", status="consolidated",
+              provenance={PROV_CODEBOOK_KEYS: {"native": 1, "chat": 2}}),
+    ]
+    adapter = SimpleNamespace(hopfield_key_match_threshold=0.85)
+    monkeypatch.setattr(model_host, "edit_module", lambda: adapter)
+    monkeypatch.setattr(keying, "gate", lambda text, **kw: (0.91, 2))  # hits the chat slot (2)
+
+    att = env.client.post("/chat", json={"message": "晚饭推荐?"}).json()["attribution"]
+    assert att is not None
+    assert att["hit"] is True
+    assert att["similarity"] == 0.91 and att["threshold"] == 0.85 and att["slot"] == 2
+    assert att["memory"] == {"id": "c1", "text": "对花生过敏"}
+
+
+def test_chat_attribution_miss_below_threshold_no_memory(env, monkeypatch):
+    """Similarity below threshold (and a slot owned by no item) -> hit False, memory None."""
+    import keying
+    from serving import model_host
+    rec = env.rec
+    rec.edit_active_val = True
+    rec.current_model_val = SimpleNamespace(model=object())
+    rec.cons_items = [
+        _item(id="c1", text="对花生过敏", status="consolidated",
+              provenance={PROV_CODEBOOK_KEYS: {"native": 1, "chat": 2}}),
+    ]
+    adapter = SimpleNamespace(hopfield_key_match_threshold=0.85)
+    monkeypatch.setattr(model_host, "edit_module", lambda: adapter)
+    monkeypatch.setattr(keying, "gate", lambda text, **kw: (0.42, 9))  # below thr, unowned slot
+
+    att = env.client.post("/chat", json={"message": "天气?"}).json()["attribution"]
+    assert att is not None
+    assert att["hit"] is False and att["memory"] is None and att["slot"] == 9

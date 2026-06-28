@@ -29,6 +29,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 # ``consolidate`` is aliased to ``consolidate_mod`` because the POST /consolidate handler
 # below is itself named ``consolidate`` (would otherwise shadow the memory module).
 import generate
+import keying
 from memory import buffer, extract, rag_store, schema, store
 from memory import consolidate as consolidate_mod
 from serving import ingest, model_host, triggers
@@ -93,7 +94,44 @@ def chat(payload: ChatRequest) -> dict:
         "retrieved": [schema.to_dict(h) for h in rag_hits],
         "extracted": result["n_extracted"],
         "rag_indexed": result["n_rag_indexed"],
+        # per-answer codebook attribution (honest: ONE retrieval decision per answer);
+        # None when editOn off / no edit installed / computation fails (best-effort).
+        "attribution": attribution(message),
     }
+
+
+def attribution(message: str) -> dict | None:
+    """Per-answer HoReN codebook attribution for ``message`` (honest: ONE decision per answer).
+
+    Under the live decode path (``use_cache=False`` + ``key_id`` pinned to the prompt) the adapter
+    makes a single retrieval decision that every generated token shares, so attribution is
+    per-answer, not per-token. Returns ``{hit, similarity, threshold, slot, memory}`` where
+    ``memory`` is the consolidated item whose codebook row the query matched (via
+    ``PROV_CODEBOOK_KEYS``), or ``None``. Returns ``None`` when no edit is installed or anything
+    fails — never raises, never breaks /chat.
+    """
+    if not model_host.edit_active():
+        return None
+    try:
+        adapter = model_host.edit_module()
+        wrapper = model_host.current_model()  # HOREN wrapper after an edit; .model is the HF model
+        sim, slot = keying.gate(message, hf_model=wrapper.model, tok=model_host.tokenizer(), adapter=adapter)
+        thr = float(getattr(adapter, "hopfield_key_match_threshold", 0.85))
+        memory = None
+        for it in store.by_status("consolidated"):
+            keys = (it.provenance or {}).get(schema.PROV_CODEBOOK_KEYS) or {}
+            if slot in (keys.get("native"), keys.get("chat")):
+                memory = {"id": it.id, "text": it.text}
+                break
+        return {"hit": sim > thr, "similarity": sim, "threshold": thr, "slot": slot, "memory": memory}
+    except Exception:
+        return None
+
+
+def rag_search(q: str, k: int = 5) -> dict:
+    """GET /rag/search — semantic search over the RAG store (empty query -> no results)."""
+    hits = rag_store.search(q, k) if q.strip() else []
+    return {"results": [schema.to_dict(h) for h in hits]}
 
 
 def consolidate(payload: ConsolidateRequest | None = None) -> dict:
@@ -259,6 +297,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def _health() -> dict:
         return health()
+
+    @app.get("/rag/search")
+    def _rag_search(q: str = "", k: int = 5) -> dict:
+        return rag_search(q, k)
 
     # Serve the static frontend from THIS app (single origin) so the SPA + the 3 API routes
     # share one host/port — no CORS, no mixed-content, nothing to configure for the browser.

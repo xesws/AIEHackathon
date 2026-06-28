@@ -133,3 +133,17 @@ def score(read_key: torch.Tensor, write_key: torch.Tensor, adapter: Any) -> floa
     finally:
         adapter.keys = saved
     return sims.max().item()
+
+
+def gate(text: str, *, hf_model: Any, tok: Any, adapter: Any) -> Tuple[float, int]:
+    """HoReN deferral gate for `text` against the INSTALLED codebook: returns ``(sim, slot)``.
+
+    ``sim`` = the max normalized-Hopfield score — the SAME value compared to the 0.85 threshold
+    at inference; ``slot`` = argmax codebook key index (which row matched). Reuses ``compute_key``
+    (the chat query-span key) + the adapter's own ``_query``, so this IS the production gate, not
+    a re-implementation. Mirrors ``eval/runtime.live_score`` and additionally surfaces the slot,
+    so serving can attribute the matched row back to the memory that created it.
+    """
+    rk = compute_key(text, templated=True, hf_model=hf_model, tok=tok, adapter=adapter)
+    scores = adapter._query(rk)
+    return scores.max().item(), int(scores.argmax().item())
