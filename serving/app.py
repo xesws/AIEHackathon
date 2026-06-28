@@ -71,7 +71,11 @@ def chat(payload: ChatRequest) -> dict:
     result = ingest.ingest([{"role": "user", "content": message}])
 
     # 2) rag-off gates ONLY the rag window: rag_hits=[] but KEEP the buffer + with_rag default.
-    rag_hits = [] if payload.rag_off else rag_store.search(message, k=5)
+    #    with_scores=True is ADDITIVE (v2.4): each hit carries its best-chunk cosine so the SPA can
+    #    floor-gate the RAG badge (a sparse store always returns top-k, but a low-cosine hit isn't
+    #    actually relevant). generate still receives the plain items — the prompt is unchanged.
+    rag_scored = [] if payload.rag_off else rag_store.search(message, k=5, with_scores=True)
+    rag_hits = [h for h, _s in rag_scored]
 
     # 3) generate on the resident (possibly edited) model, conditioned on buffer + rag_hits.
     reply = generate.generate(
@@ -91,7 +95,9 @@ def chat(payload: ChatRequest) -> dict:
         "reply": reply,
         "buffer_count": len(buffer.load_unconsolidated()),
         "learned": result["edit_ids"],
-        "retrieved": [schema.to_dict(h) for h in rag_hits],
+        # each retrieved doc carries its best-chunk cosine ("score") so the SPA can floor-gate
+        # the RAG badge (v2.4). rag_off -> rag_scored == [] -> retrieved == [] (unchanged).
+        "retrieved": [{**schema.to_dict(h), "score": round(s, 4)} for h, s in rag_scored],
         "extracted": result["n_extracted"],
         "rag_indexed": result["n_rag_indexed"],
         # per-answer codebook attribution (honest: ONE retrieval decision per answer);

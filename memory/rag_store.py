@@ -113,7 +113,7 @@ def _rerank(query: str, candidates: list[MemoryItem]) -> list[MemoryItem]:
     return ranked
 
 
-def search(query: str, k: int = 5) -> list[MemoryItem]:
+def search(query: str, k: int = 5, *, with_scores: bool = False):
     """Return the top-``k`` RAG items for ``query`` (chunk retrieval + LLM re-rank).
 
     Cosine over the chunk index selects the top-N (``N = max(k*4, 20)``) chunks,
@@ -122,6 +122,14 @@ def search(query: str, k: int = 5) -> list[MemoryItem]:
     returned. Empty store -> ``[]``. FALLBACK: if the re-rank step fails (or there
     are ``<= k`` candidates), candidates are returned in cosine order. No semantic
     dedup happens here (that is ``dedup.py``'s job for the edit route).
+
+    ``with_scores`` is ADDITIVE (v2.4): when ``True`` the return is
+    ``list[tuple[MemoryItem, float]]`` where ``float`` is that parent's best-chunk
+    cosine (already computed in ``best_for_parent`` — just exposed). It changes
+    NOTHING about which items are selected, their order, or ``k`` — callers that
+    omit it (the default ``False``) get the exact same ``list[MemoryItem]`` as
+    before. Used by ``/chat`` so the UI can floor-gate the RAG badge: a sparse
+    store always returns top-k, but a low-cosine hit is not actually relevant.
     """
     if not _chunks:
         return []
@@ -143,9 +151,15 @@ def search(query: str, k: int = 5) -> list[MemoryItem]:
     candidates = [by_id[i] for i in ranked_ids if i in by_id]
 
     if len(candidates) <= k:
-        return candidates[:k]
-    try:
-        candidates = _rerank(query, candidates)
-    except Exception:
-        pass  # fall back to cosine order
-    return candidates[:k]
+        result = candidates[:k]
+    else:
+        try:
+            candidates = _rerank(query, candidates)
+        except Exception:
+            pass  # fall back to cosine order
+        result = candidates[:k]
+
+    if with_scores:
+        # Attach each item's best-chunk cosine (order/selection unchanged).
+        return [(item, best_for_parent.get(item.id, 0.0)) for item in result]
+    return result

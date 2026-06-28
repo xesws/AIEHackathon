@@ -122,9 +122,12 @@ def env(monkeypatch):
         rec.manual_calls += 1
         return 2
 
-    def fake_search(query, k=5):
+    def fake_search(query, k=5, with_scores=False):
+        # v2.4: /chat now calls with with_scores=True (additive). Mirror the real return shape:
+        # list[(item, cosine)] when scored, else the plain item list.
         rec.search_calls.append({"query": query, "k": k})
-        return list(rec.search_hits)
+        hits = list(rec.search_hits)
+        return [(h, 0.9) for h in hits] if with_scores else hits
 
     def fake_load_unconsolidated():
         return list(rec.buffer_items)

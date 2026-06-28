@@ -27,6 +27,14 @@ import {
    Override window.__ENGRAM_API__ only for a split dev setup (static server + backend elsewhere). */
 const API = (typeof window !== "undefined" && window.__ENGRAM_API__) || "";
 
+/* RAG badge relevance floor (v2.4). A sparse store always returns top-k by cosine, but a
+   low-cosine "hit" was never really one of your documents — without this gate EVERY rag-on
+   answer mislabels itself "检索自你的文档 · 猫". Only badge retrieved docs whose best-chunk
+   MiniLM cosine clears this floor. Calibrated against the demo store: cat-query -> 0.64,
+   irrelevant winter-query -> -0.01 (relevant cluster >=0.50, irrelevant <=0.045), so 0.3
+   sits cleanly in the gap. Below floor -> no RAG badge. */
+const RAG_FLOOR = 0.3;
+
 async function _json(r, what) {
   if (!r.ok) throw new Error(`${what} ${r.status}`);
   return r.json();
@@ -498,11 +506,17 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                     <Database size={13} /> retrieved from your documents · {m.retrieved}
                   </div>
                 )}
-                {m.retrievedDocs && m.retrievedDocs.length > 0 && (
-                  <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.muted, fontFamily: F.sans }}>
-                    <Database size={13} /> 检索自你的文档 · 在 prompt 里(看得见) · {m.retrievedDocs.length === 1 ? m.retrievedDocs[0].slice(0, 24) : `${m.retrievedDocs.length} 篇`}
-                  </div>
-                )}
+                {(() => {
+                  // v2.4 floor gate: only badge docs whose relevance clears RAG_FLOOR, so a
+                  // sparse store's always-top-k no longer mislabels every answer "检索自你的文档·猫".
+                  const above = (m.retrievedDocs || []).filter((d) => (d.score ?? 0) > RAG_FLOOR);
+                  if (above.length === 0) return null;
+                  return (
+                    <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.muted, fontFamily: F.sans }}>
+                      <Database size={13} /> 检索自你的文档 · 在 prompt 里(看得见) · {above.length === 1 ? above[0].text.slice(0, 24) : `${above.length} 篇`}
+                    </div>
+                  );
+                })()}
                 {m.fromWeights && (
                   <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, fontFamily: F.sans }}>
                     <Zap size={13} /> 来自权重 · 不在 prompt 里(内化进模型,看不见却答对)
@@ -704,7 +718,8 @@ function Engram() {
       const ragOff = !ragOn;
       const resp = await apiChat(text, ragOff);     // { reply, learned, retrieved, extracted, ... }
       const learned = resp.learned || [];
-      const docs = (resp.retrieved || []).map((d) => d.text);
+      // v2.4: keep each doc's relevance score so the badge below can floor-gate it.
+      const docs = (resp.retrieved || []).map((d) => ({ text: d.text, score: d.score }));
       setMessages((m) => [...m, {
         role: "assistant",
         text: resp.reply,
