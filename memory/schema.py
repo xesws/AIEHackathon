@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal, Optional
 
-MemoryType = Literal["fact", "preference", "belief", "jargon"]
+MemoryType = Literal["fact", "belief", "other"]
 Route = Literal["edit", "rag"]
 Status = Literal["buffer", "consolidated", "retired"]
 DedupVerdict = Literal["duplicate", "supersede", "new"]
@@ -28,7 +28,7 @@ class MemoryItem:
 
     Fields:
         id:         stable unique id
-        type:       fact | preference | belief | jargon
+        type:       fact | belief | other
         text:       canonical natural-language statement
         route:      edit (-> weights) | rag (-> retrieval store)
         status:     buffer | consolidated | retired
@@ -96,7 +96,7 @@ def from_dict(d: dict) -> MemoryItem:
         raise ValueError(
             f"from_dict: invalid status {d['status']!r}; expected one of {valid_statuses}"
         )
-    valid_types = ("fact", "preference", "belief", "jargon")
+    valid_types = ("fact", "belief", "other")
     if d["type"] not in valid_types:
         raise ValueError(
             f"from_dict: invalid type {d['type']!r}; expected one of {valid_types}"

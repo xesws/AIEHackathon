@@ -273,20 +273,28 @@ def test_mixed_routing_per_item(fake_llm, route_all):
     fake_llm.set(
         {
             "items": [
-                _item(text="JQ is allergic to nickel", target="nickel"),
-                _item(text="User defaults to Postgres for OLTP", target="Postgres"),
+                # objective personal attribute -> fact -> rag
+                _item(text="JQ is allergic to nickel", type="fact", target="nickel"),
+                # subjective preference -> belief -> edit
+                _item(
+                    text="User defaults to Postgres for OLTP",
+                    type="belief",
+                    target="Postgres",
+                ),
             ]
         }
     )
-    # Route the allergy fact to edit, the preference to rag.
-    route_all.set(lambda it: "edit" if "nickel" in it.text else "rag")
+    # New router mapping (INV-5): belief -> edit, fact/other -> rag.
+    route_all.set(lambda it: "edit" if it.type == "belief" else "rag")
 
     by_text = {it.text: it for it in extract.extract(CHAT)}
     assert len(by_text) == 2
-    assert by_text["JQ is allergic to nickel"].route == "edit"
-    assert PROV_EDIT in by_text["JQ is allergic to nickel"].provenance
-    assert by_text["User defaults to Postgres for OLTP"].route == "rag"
-    assert PROV_EDIT not in by_text["User defaults to Postgres for OLTP"].provenance
+    # The fact routes to RAG and carries no edit decomposition.
+    assert by_text["JQ is allergic to nickel"].route == "rag"
+    assert PROV_EDIT not in by_text["JQ is allergic to nickel"].provenance
+    # The belief routes to EDIT and records the HoReN decomposition.
+    assert by_text["User defaults to Postgres for OLTP"].route == "edit"
+    assert PROV_EDIT in by_text["User defaults to Postgres for OLTP"].provenance
 
 
 # --------------------------------------------------------------------------- #

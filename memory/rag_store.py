@@ -57,6 +57,7 @@ def _mean_vector(vectors: list[list[float]]) -> list[float]:
     return [v / n for v in acc]
 
 
+# rag_store holds BOTH type=="fact" and type=="other" items; the preserved type tag drives prompt segmentation downstream.
 def add(item: MemoryItem) -> None:
     """Index ``item`` (chunk + embed + persist) into the permanent RAG store.
 

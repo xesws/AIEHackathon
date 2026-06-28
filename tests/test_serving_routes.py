@@ -122,7 +122,7 @@ def env(monkeypatch):
     rec.buffer_items = [_item(id="buf1", text="buffered fact")]
     rec.cons_items = [
         _item(id="c1", text="weight fact 1", status="consolidated"),
-        _item(id="c2", type="preference", text="weight pref 2", status="consolidated",
+        _item(id="c2", type="belief", text="weight pref 2", status="consolidated",
               provenance={"k": "v"}),
     ]
     rec.rag_items = [

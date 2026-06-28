@@ -22,19 +22,29 @@ _MAX_SINGLE_CHARS = 6000  # transcripts longer than this are split into windows.
 _WINDOW_MSGS = 12  # messages per extraction window when batching.
 _OVERLAP_MSGS = 3  # overlap between consecutive windows so context isn't lost.
 
-_VALID_TYPES = {"fact", "preference", "belief", "jargon"}
+_VALID_TYPES = {"fact", "belief", "other"}
 
 _SYSTEM = (
     "You extract ATOMIC, durable memories about the USER from a conversation. "
-    "Surface only stable facts, preferences, beliefs, or jargon worth remembering; "
-    "ignore small talk and transient context. "
+    "Surface only stable, reference-worthy information; ignore small talk and "
+    "transient context. "
+    "Classify each item's \"type\" as EXACTLY one of fact|belief|other -- this is "
+    "the routing decision that determines where the memory is stored:\n"
+    "  - fact = an OBJECTIVE, verifiable PERSONAL attribute of the user/JQ (cat "
+    "name, car, allergy, address, alma mater, job). Strip the person and it is "
+    "meaningless. It will go to RAG (retrieval).\n"
+    "  - belief = the user's SUBJECTIVE opinion/preference/worldview (\"Rust is "
+    "the best language\", \"SF summers are cold\"). Strip the person and it is a "
+    "standalone world-assertion. It will be internalized into the model's weights.\n"
+    "  - other = information NOT about the user personally but worth remembering "
+    "(world knowledge, scheduled events, reference content). It will go to RAG.\n"
     "Resolve coreference so every field is self-contained: rewrite pronouns and "
     "ellipsis to concrete entities (\"I/my/me\" -> the user; \"it/he/she/they\" -> "
     "the named subject) before emitting. "
     "Work in the conversation's own language; do NOT translate to English. "
     'Return STRICT JSON: an object {"items": [ ... ]} where each item is '
     '{"text": <=15-word canonical proposition, "type": one of '
-    '"fact"|"preference"|"belief"|"jargon", "stem": cloze/question stem for editing, '
+    '"fact"|"belief"|"other", "stem": cloze/question stem for editing, '
     '"target": the answer/value to teach, "subject": the entity, '
     '"confidence": a number in [0,1] for how sure you are this is a durable memory}. '
     "Decompose so that stem + target reconstruct text. If nothing is worth remembering, "
@@ -43,12 +53,14 @@ _SYSTEM = (
 
 _FEWSHOT_USER = (
     "USER: I'm JQ and I'm allergic to nickel buckles.\n"
-    "USER: For OLTP I always reach for Postgres by default."
+    "USER: For OLTP I always reach for Postgres by default.\n"
+    "USER: Our team standup is every Monday at 10am."
 )
 _FEWSHOT_ASSISTANT = json.dumps(
     {
         "items": [
             {
+                # objective personal attribute of JQ -> fact -> RAG
                 "text": "JQ is allergic to nickel buckles",
                 "type": "fact",
                 "stem": "JQ is allergic to",
@@ -57,12 +69,22 @@ _FEWSHOT_ASSISTANT = json.dumps(
                 "confidence": 0.97,
             },
             {
+                # subjective preference / worldview -> belief -> weights
                 "text": "User uses Postgres by default for OLTP",
-                "type": "preference",
+                "type": "belief",
                 "stem": "For OLTP the user defaults to",
                 "target": "Postgres",
                 "subject": "user",
                 "confidence": 0.9,
+            },
+            {
+                # not about the user personally, but worth remembering -> other -> RAG
+                "text": "Team standup is every Monday at 10am",
+                "type": "other",
+                "stem": "Team standup is every",
+                "target": "Monday at 10am",
+                "subject": "team standup",
+                "confidence": 0.85,
             },
         ]
     }

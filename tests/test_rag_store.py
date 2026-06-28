@@ -24,11 +24,18 @@ from memory.schema import MemoryItem
 # --------------------------------------------------------------------------- #
 # Helpers / fixtures
 # --------------------------------------------------------------------------- #
-def make_rag_item(item_id: str, text: str, *, status: str = "buffer") -> MemoryItem:
-    """Build a rag-route ``MemoryItem`` (the kind ``rag_store.add`` indexes)."""
+def make_rag_item(
+    item_id: str, text: str, *, mtype: str = "fact", status: str = "buffer"
+) -> MemoryItem:
+    """Build a rag-route ``MemoryItem`` (the kind ``rag_store.add`` indexes).
+
+    ``mtype`` defaults to ``"fact"`` but rag_store now also holds ``"other"``
+    items (router sends both fact and other to route==rag); belief never reaches
+    here (INV-2). The type tag must round-trip through the store unchanged.
+    """
     return MemoryItem(
         id=item_id,
-        type="fact",
+        type=mtype,
         text=text,
         route="rag",
         status=status,
@@ -261,3 +268,54 @@ def test_reset_clears_chunk_index(vecs, llm_spy):
     rag_store.reset()
 
     assert rag_store._chunks == []
+
+
+# --------------------------------------------------------------------------- #
+# 7. type tag preserved + retrievable (fact AND other both live in rag_store)
+#    These use the REAL embed (CPU, deterministic) — NOT the ``vecs`` patch — so
+#    the assertions exercise actual cosine semantics, not a hand-tuned table.
+#    ``llm_spy`` is still used to PROVE no network re-rank fires (candidates<=k).
+# --------------------------------------------------------------------------- #
+def test_add_fact_preserves_type_and_is_retrievable(llm_spy):
+    """A short single-sentence fact round-trips with type=='fact' intact and is
+    surfaced by a related query (one chunk, retrievable)."""
+    item = make_rag_item("rcat", "JQ's cat is named Coco.", mtype="fact")
+    rag_store.add(item)
+
+    # Short text (<= CHUNK_CHARS) -> exactly one chunk.
+    assert len(rag_store._chunks) == 1
+
+    out = rag_store.search("What is JQ's cat's name?", k=5)
+
+    assert _ids(out) == ["rcat"]            # the fact is retrieved
+    assert out[0].type == "fact"            # type tag survives the store round-trip
+    assert llm_spy.calls == []              # single candidate (<= k) -> no re-rank
+
+
+def test_add_other_preserves_type_and_is_retrievable(llm_spy):
+    """type=='other' items now live in rag_store too; the tag is preserved and the
+    item is retrievable."""
+    item = make_rag_item(
+        "rnote", "The team standup moved to 10am on Tuesdays.", mtype="other"
+    )
+    rag_store.add(item)
+
+    out = rag_store.search("When is the standup meeting?", k=5)
+
+    assert _ids(out) == ["rnote"]
+    assert out[0].type == "other"           # 'other' tag preserved, not coerced
+    assert llm_spy.calls == []
+
+
+def test_search_precision_cat_fact_beats_unrelated_car_fact(llm_spy):
+    """Precision / no cross-talk: with both a cat fact and an unrelated car fact
+    indexed, a cat-name query ranks the cat fact first (real embeddings)."""
+    rag_store.add(make_rag_item("rcat", "JQ's cat is named Coco.", mtype="fact"))
+    rag_store.add(make_rag_item("rcar", "JQ drives a red Toyota car.", mtype="fact"))
+
+    out = rag_store.search("What is JQ's cat's name?", k=5)
+
+    # 2 candidates <= k -> pure cosine order (no re-rank). Cat fact must win.
+    assert out[0].id == "rcat"
+    assert out[0].type == "fact"
+    assert llm_spy.calls == []

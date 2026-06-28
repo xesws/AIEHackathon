@@ -84,7 +84,7 @@ def env(monkeypatch):
             status="consolidated", source="msg-0", ts=1.0, provenance=None,
         ),
         schema.MemoryItem(
-            id="c2", type="preference", text="weight pref 2", route="edit",
+            id="c2", type="belief", text="weight pref 2", route="edit",
             status="consolidated", source="msg-0", ts=2.0, provenance={"k": "v"},
         ),
     ]
