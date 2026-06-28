@@ -338,6 +338,20 @@ def test_health_reports_ready_edit_on_and_counts(env):
     assert body["counts"] == {"buffer": 1, "consolidated": 2, "rag": 1}
 
 
+def test_health_edit_on_mirrors_edit_active_true(env):
+    """C3 lock: /health.edit_on must mirror model_host.edit_active() in BOTH directions.
+
+    The False case is covered above; here edit_active() is True (exactly the post-consolidate
+    state — editing.edit installs the adapter, so edit_active() flips True). Because the SPA
+    switch re-syncs to /health.edit_on on every refresh() and /health.edit_on returns the raw
+    slot truth (no shadow state), the switch can never residually desync from the server. So C3
+    is NOT a desync bug; this test pins the honest-mirror invariant that makes it so."""
+    rec = env.rec
+    rec.edit_active_val = True
+    body = env.client.get("/health").json()
+    assert body["edit_on"] is True
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # POST /consolidate/item — per-item consolidation via triggers.manual(ids=[id])
 # ──────────────────────────────────────────────────────────────────────────────

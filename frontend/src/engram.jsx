@@ -121,16 +121,18 @@ function Mark({ size = 22 }) {
   );
 }
 
-function Switch({ on, onChange, label }) {
+function Switch({ on, onChange, label, disabled }) {
   return (
     <button
-      role="switch" aria-checked={on} aria-label={label}
-      onClick={() => onChange(!on)}
+      role="switch" aria-checked={on} aria-label={label} disabled={disabled}
+      onClick={() => !disabled && onChange(!on)}
       className="relative inline-flex items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
       style={{
         width: 38, height: 21, padding: 2,
         background: on ? C.trace : "#3A4049",
         ringOffsetColor: C.graphite,
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
       }}
     >
       <span className="block rounded-full transition-transform"
@@ -233,9 +235,17 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
               <div className="flex items-center gap-1.5" style={{ color: C.labText, fontSize: 13, fontFamily: F.sans }}>
                 <Zap size={13} style={{ color: C.labMuted }} /> edit module
               </div>
-              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>权重里的记忆 · 关掉即拔出(热插拔)</div>
+              {/* F4: this switch only MOUNTS/UNMOUNTS the already-written adapter (hot-swap on/off);
+                  persisting into weights is a separate action (consolidate). F3: with no adapter
+                  yet (codebookK===0) toggling ON would 409, so the switch is disabled with a plain
+                  "consolidate first" hint instead of letting the user spam a misleading error. */}
+              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>
+                {codebookK === 0
+                  ? "还没有写入权重 — 先 consolidate"
+                  : "挂载/拔出已写入的 adapter(热插拔)· 写入交给 consolidate"}
+              </div>
             </div>
-            <Switch on={editOn} onChange={onToggleEdit} label="edit module" />
+            <Switch on={editOn} onChange={onToggleEdit} label="edit module" disabled={codebookK === 0} />
           </div>
         </div>
 
