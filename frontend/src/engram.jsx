@@ -18,7 +18,7 @@ import {
      POST /memories/{id}/route {route}   -> {ok, buffer_count}
      PATCH /memories/{id} {text}         -> {item}
      POST /edit-module {on}              -> {on}                             (hot-swap adapter)
-     GET  /health                        -> {ready, edit_on, edit_available, codebook_size, boot_id, started_at, counts}
+     GET  /health                        -> {ready, edit_on, edit_available, codebook_size, boot_id, started_at, counts, async_editor}
    Still mock (no backend feed this round): TokenAttribution per-token 归因, recalled-badge,
    the seed opening conversation, the Reference search box. Core-memory delete is hidden
    (codebook is append-only — no single-item un-edit).
@@ -51,7 +51,7 @@ async function apiConsolidate() {
 
 async function apiConsolidationJob(id) {
   return _json(await fetch(`${API}/consolidate/jobs/${encodeURIComponent(id)}`), "/consolidate/jobs");
-} // { job }
+} // { job: {id,status,n_written,error,started_at,finished_at} }
 
 async function apiConsolidateItem(id) {
   return _json(await fetch(`${API}/consolidate/item`, _POST({ id })), "/consolidate/item");
@@ -252,8 +252,54 @@ function TokenAttribution({ attribution, answerText, editOn, ragOff }) {
   );
 }
 
+function AsyncEditorStatus({ asyncEditor, activeJob, consolidating, codebookK }) {
+  const counts = asyncEditor?.counts || {};
+  const running = asyncEditor?.running || null;
+  const job = activeJob || running;
+  const status = job?.status || (consolidating ? "running" : "idle");
+  const workerAlive = !!asyncEditor?.worker_alive;
+  const queueDepth = Number(asyncEditor?.queue_depth || 0);
+  const statusColor = status === "failed" ? C.amberText : status === "succeeded" ? C.traceText : consolidating || status === "running" ? C.trace : C.labMuted;
+  return (
+    <div style={{ background: C.graphite2, borderRadius: 10, padding: "10px 11px" }}>
+      <div className="flex items-center gap-1.5 mb-2" style={{ color: C.labMuted, fontSize: 11.5, fontFamily: F.sans }}>
+        <Activity size={12} /><span>async consolidation</span>
+        <span className="ml-auto" style={{ fontFamily: F.mono, color: statusColor }}>{status}</span>
+      </div>
+      <div className="grid grid-cols-4" style={{ gap: 6 }}>
+        {[
+          ["worker", workerAlive ? "on" : "off"],
+          ["queue", queueDepth],
+          ["ok", counts.succeeded || 0],
+          ["fail", counts.failed || 0],
+        ].map(([k, v]) => (
+          <div key={k} style={{ background: C.graphite, border: `0.5px solid ${C.graphiteLine}`, borderRadius: 7, padding: "6px 6px" }}>
+            <div style={{ color: C.labMuted, fontSize: 10.5, fontFamily: F.sans }}>{k}</div>
+            <div style={{ color: k === "fail" && v ? C.amberText : C.labText, fontSize: 12, fontFamily: F.mono, marginTop: 1 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {job?.id ? (
+        <div className="mt-2.5" style={{ color: C.labMuted, fontSize: 11, fontFamily: F.sans, lineHeight: 1.55 }}>
+          <div className="flex items-center justify-between" style={{ gap: 8 }}>
+            <span style={{ color: C.labText }}>job #{String(job.id).slice(0, 8)}</span>
+            <span style={{ color: statusColor, fontFamily: F.mono }}>{job.status}{Number.isFinite(Number(job.n_written)) ? ` · wrote ${job.n_written}` : ""}</span>
+          </div>
+          {job.error && <div style={{ color: C.amberText, marginTop: 3 }}>{String(job.error).slice(0, 110)}</div>}
+        </div>
+      ) : (
+        <div className="mt-2.5" style={{ color: C.labMuted, fontSize: 11, fontFamily: F.sans }}>queue a belief from staged memory to watch shadow training here</div>
+      )}
+      <div className="mt-2 flex items-center justify-between" style={{ color: C.labMuted, fontSize: 10.5, fontFamily: F.mono }}>
+        <span>live swap: request boundary</span>
+        <span>rows={codebookK}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- developer view ---------------- */
-function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, editAvailable, busy, onConsolidate, consolidating, justCommitted, attribution, answerText, ragOff, specTokens }) {
+function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, editAvailable, asyncEditor, activeJob, busy, onConsolidate, consolidating, justCommitted, attribution, answerText, ragOff, specTokens }) {
   const labelCss = { fontSize: 11, color: C.labMuted, fontFamily: F.sans, letterSpacing: 0.3, textTransform: "uppercase" };
   const noAdapter = !editAvailable || codebookK === 0;
   return (
@@ -269,6 +315,8 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
             <span style={{ width: 6, height: 6, borderRadius: 99, background: C.trace }} /> live
           </span>
         </div>
+
+        <AsyncEditorStatus asyncEditor={asyncEditor} activeJob={activeJob} consolidating={consolidating} codebookK={codebookK} />
 
         {/* kill switches */}
         <div className="flex flex-col" style={{ gap: 12 }}>
@@ -642,6 +690,8 @@ function Engram() {
   const [sending, setSending] = useState(false);    // /chat in-flight
   const [consolidating, setConsolidating] = useState(false); // /consolidate(/item) in-flight (GPU)
   const [serverInfo, setServerInfo] = useState({ bootId: null, codebookSize: 0, editAvailable: false });
+  const [asyncEditor, setAsyncEditor] = useState({ worker_alive: false, queue_depth: 0, running: null, counts: {}, latest: [] });
+  const [activeJob, setActiveJob] = useState(null);
   const [restartNotice, setRestartNotice] = useState(false);
   const [hasRealConversation, setHasRealConversation] = useState(false);
   const bootIdRef = useRef(null);
@@ -689,6 +739,7 @@ function Engram() {
       codebookSize: Number.isFinite(Number(h.codebook_size)) ? Number(h.codebook_size) : 0,
       editAvailable: !!h.edit_available,
     });
+    setAsyncEditor(h.async_editor || { worker_alive: false, queue_depth: 0, running: null, counts: {}, latest: [] });
     if (typeof h.edit_on === "boolean") setEditOn(h.edit_on);
     return h;
   };
@@ -747,6 +798,7 @@ function Engram() {
     const deadline = Date.now() + 180000;
     while (Date.now() < deadline) {
       const { job } = await apiConsolidationJob(jobId);
+      if (job) setActiveJob(job);
       if (job?.status === "succeeded") return job;
       if (job?.status === "failed") throw new Error(job.error || "async consolidation failed");
       await new Promise((resolve) => setTimeout(resolve, 900));
@@ -760,6 +812,7 @@ function Engram() {
     setConsolidating(true);
     try {
       const res = await apiConsolidate();   // { queued, job, buffer_count }
+      if (res?.job) setActiveJob(res.job);
       if (res?.job?.id) await waitForConsolidationJob(res.job.id);
       await refresh();                     // buffer drained after swap -> core memories grow
     } catch (e) {
@@ -942,7 +995,8 @@ function Engram() {
           {dev && (
             <LabPanel
               ragOn={ragOn} setRagOn={setRagOn} editOn={editOn} onToggleEdit={toggleEdit}
-              buffer={buffer} weights={weights} refs={refs} codebookK={serverInfo.codebookSize} editAvailable={serverInfo.editAvailable} busy={actionBusy}
+              buffer={buffer} weights={weights} refs={refs} codebookK={serverInfo.codebookSize} editAvailable={serverInfo.editAvailable}
+              asyncEditor={asyncEditor} activeJob={activeJob} busy={actionBusy}
               onConsolidate={consolidate} consolidating={consolidating} justCommitted={justCommitted}
               attribution={lastAnswer?.attribution || null} answerText={lastAnswer?.text || ""} ragOff={!!lastAnswer?.ragOff} specTokens={specTokens}
             />
