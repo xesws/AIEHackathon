@@ -138,9 +138,10 @@ function Switch({ on, onChange, label }) {
    Honest: under the live decode path the adapter makes ONE retrieval decision the whole answer
    shares (not per-token), so we surface that single decision — matched slot + similarity vs the
    0.85 threshold + which memory it came from — and tint the whole answer uniformly when it hit. */
-function TokenAttribution({ attribution, answerText, editOn }) {
+function TokenAttribution({ attribution, answerText, editOn, ragOff }) {
   const words = (answerText || "").split(/(\s+)/).filter((w) => w.length);
-  const hit = !!(editOn && attribution && attribution.hit);
+  const codebookHit = !!(attribution && attribution.hit);
+  const weightProof = !!(codebookHit && ragOff);
 
   return (
     <div>
@@ -148,40 +149,40 @@ function TokenAttribution({ attribution, answerText, editOn }) {
         <Activity size={13} /> retrieval · latest answer
       </div>
 
-      {!editOn ? (
-        <div style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>edit module 已关 — 无归因</div>
-      ) : !attribution ? (
-        <div style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>还没有命中编辑的回答 —— 在 Chat 里问问你写入过的事</div>
+      {!attribution ? (
+        <div style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>
+          {editOn ? "还没有命中编辑的回答 —— 在 Chat 里问问你写入过的事" : "edit module 已关 — 无归因"}
+        </div>
       ) : (
         <>
           <div className="flex flex-wrap items-center" style={{ gap: "3px 4px", fontFamily: F.mono, fontSize: 13, lineHeight: 1.8 }}>
             {words.map((w, i) => (
-              <span key={i} style={hit
-                ? { background: C.traceFill, color: C.traceText, padding: "1px 4px", borderRadius: 4 }
+              <span key={i} style={codebookHit
+                ? { background: weightProof ? C.traceFill : C.amberChip, color: weightProof ? C.traceText : C.amberText, padding: "1px 4px", borderRadius: 4 }
                 : { color: C.labText, opacity: 0.9 }}>{w}</span>
             ))}
           </div>
 
-          {hit && attribution.memory && (
+          {codebookHit && attribution.memory && (
             <div className="flex items-start gap-2 mt-2.5" style={{ maxWidth: 320 }}>
-              <CornerLeftUp size={15} style={{ color: C.trace, marginTop: 1 }} />
-              <div style={{ background: C.graphite2, border: `0.5px solid ${C.traceDim}`, borderRadius: 8, padding: "6px 9px" }}>
+              <CornerLeftUp size={15} style={{ color: weightProof ? C.trace : C.amberText, marginTop: 1 }} />
+              <div style={{ background: C.graphite2, border: `0.5px solid ${weightProof ? C.traceDim : C.amberChip}`, borderRadius: 8, padding: "6px 9px" }}>
                 <div style={{ color: C.labText, fontSize: 12, fontFamily: F.sans }}>
                   codebook hit · sim <span style={{ fontFamily: F.mono }}>{attribution.similarity.toFixed(2)}</span>
                 </div>
                 <div style={{ color: C.labMuted, fontSize: 11.5, marginTop: 2, fontFamily: F.sans }}>
-                  ← memory: <span style={{ color: C.traceText }}>{attribution.memory.text}</span>
+                  ← memory: <span style={{ color: weightProof ? C.traceText : C.amberText }}>{attribution.memory.text}</span>
                 </div>
               </div>
             </div>
           )}
 
           <div className="flex items-center justify-between flex-wrap mt-4 pt-3" style={{ borderTop: `0.5px solid ${C.graphiteLine}`, gap: 10 }}>
-            <span style={{ fontSize: 11, color: hit ? C.traceText : C.labMuted, fontFamily: F.sans }}>
-              {hit ? "codebook 注入 · 来自权重,不在 prompt 里" : "base model only · 未过阈值"}
+            <span style={{ fontSize: 11, color: codebookHit ? (weightProof ? C.traceText : C.amberText) : C.labMuted, fontFamily: F.sans }}>
+              {weightProof ? "codebook 注入 · 来自权重,不在 prompt 里" : codebookHit ? "codebook 命中 · RAG 也开启,不是权重-only proof" : "base model only · 未过阈值"}
             </span>
             <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>
-              sim {attribution.similarity.toFixed(2)} {hit ? ">" : "<"} {attribution.threshold.toFixed(2)} · slot #{attribution.slot}
+              sim {attribution.similarity.toFixed(2)} {codebookHit ? ">" : "<"} {attribution.threshold.toFixed(2)} · slot #{attribution.slot}
             </span>
           </div>
         </>
@@ -191,7 +192,7 @@ function TokenAttribution({ attribution, answerText, editOn }) {
 }
 
 /* ---------------- developer view ---------------- */
-function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, attribution, answerText, specTokens }) {
+function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, attribution, answerText, ragOff, specTokens }) {
   const labelCss = { fontSize: 11, color: C.labMuted, fontFamily: F.sans, letterSpacing: 0.3, textTransform: "uppercase" };
   return (
     <aside
@@ -284,7 +285,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
         {/* signature — per-answer codebook attribution (real, from /chat.attribution) */}
         <div className="pt-1">
           <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, lineHeight: 1.6, marginBottom: 10 }}>fact = 检索进 prompt(看得见) · belief = 内化进权重(不在 prompt,却答对)</div>
-          <TokenAttribution attribution={attribution} answerText={answerText} editOn={editOn} />
+          <TokenAttribution attribution={attribution} answerText={answerText} editOn={editOn} ragOff={ragOff} />
 
           <div className="mt-3.5" style={{ opacity: ragOn ? 1 : 0.5 }}>
             <div className="flex items-center justify-between mb-1.5">
@@ -502,7 +503,7 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                     <Database size={13} /> 检索自你的文档 · 在 prompt 里(看得见) · {m.retrievedDocs.length === 1 ? m.retrievedDocs[0].slice(0, 24) : `${m.retrievedDocs.length} 篇`}
                   </div>
                 )}
-                {m.attribution && m.attribution.hit && editOn && (
+                {m.fromWeights && (
                   <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, fontFamily: F.sans }}>
                     <Zap size={13} /> 来自权重 · 不在 prompt 里(内化进模型,看不见却答对)
                   </div>
@@ -700,7 +701,8 @@ function Engram() {
     setMessages((m) => [...m, { role: "user", text }]);
     setSending(true);
     try {
-      const resp = await apiChat(text, !ragOn);     // { reply, learned, retrieved, extracted, ... }
+      const ragOff = !ragOn;
+      const resp = await apiChat(text, ragOff);     // { reply, learned, retrieved, extracted, ... }
       const learned = resp.learned || [];
       const docs = (resp.retrieved || []).map((d) => d.text);
       setMessages((m) => [...m, {
@@ -708,6 +710,8 @@ function Engram() {
         text: resp.reply,
         captured: learned.length ? `${learned.length} 条信念` : undefined,
         retrievedDocs: docs,
+        ragOff,
+        fromWeights: !!(resp.attribution && resp.attribution.hit && ragOff),
         attribution: resp.attribution || null,   // per-answer codebook attribution (under the hood panel)
       }]);
       await refresh(); // reflect newly buffered facts in the staged counter/list
@@ -796,7 +800,7 @@ function Engram() {
               ragOn={ragOn} setRagOn={setRagOn} editOn={editOn} onToggleEdit={toggleEdit}
               buffer={buffer} weights={weights} refs={refs} codebookK={weights.length}
               onConsolidate={consolidate} consolidating={consolidating} justCommitted={justCommitted}
-              attribution={lastAnswer?.attribution || null} answerText={lastAnswer?.text || ""} specTokens={specTokens}
+              attribution={lastAnswer?.attribution || null} answerText={lastAnswer?.text || ""} ragOff={!!lastAnswer?.ragOff} specTokens={specTokens}
             />
           )}
         </div>
