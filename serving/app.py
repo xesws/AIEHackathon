@@ -40,6 +40,14 @@ _BOOT_ID = uuid.uuid4().hex
 _STARTED_AT = time.time()
 
 
+def _persistence_enabled() -> bool:
+    """Default persistence on for serving, off under pytest unless explicitly enabled."""
+    raw = os.environ.get("ENGRAM_PERSISTENCE")
+    if raw is not None:
+        return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return "PYTEST_CURRENT_TEST" not in os.environ
+
+
 # --- request models ---------------------------------------------------------------------
 class ChatRequest(BaseModel):
     message: str
@@ -295,7 +303,14 @@ def health() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load base weights (~90s, ~16GB) then wire the model provider for consolidation."""
+    persist = _persistence_enabled()
+    data_dir = os.environ.get("ENGRAM_DATA_DIR")
+    if persist:
+        store.enable_persistence(data_dir=data_dir, load=True)
+        rag_store.enable_persistence(data_dir=data_dir, load=True)
     model_host.load_base()
+    if persist:
+        model_host.enable_codebook_persistence(data_dir=data_dir, load=True)
     consolidate_mod.set_model_provider(lambda: model_host.current_model())
     async_editor.start()
     try:

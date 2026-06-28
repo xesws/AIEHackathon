@@ -7,11 +7,18 @@ submodule between the adapter (edit active) and the original Linear (base behavi
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
+import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Optional
+
+from memory import persistence
+
+logger = logging.getLogger(__name__)
 
 # --- make the vendored HoReN importable as top-level package ``src`` --------------------
 _HOREN_ROOT = os.path.join(
@@ -32,7 +39,18 @@ _S: dict = {
     "original": None,   # the pristine nn.Linear captured at load (== adapter.layer)
     "adapter": None,    # the installed HopfieldAdapter (the edit module), once an edit is applied
     "inference_lock": threading.RLock(),  # guards request-boundary edit-module promotion
+    "codebook_path": None,
 }
+
+_CODEBOOK_VERSION = 1
+_CODEBOOK_FILE = "codebook.pt"
+
+
+def _codebook_path_for(
+    data_dir: str | os.PathLike | None = None,
+    path: str | os.PathLike | None = None,
+) -> Path:
+    return Path(path) if path is not None else persistence.data_dir(data_dir) / _CODEBOOK_FILE
 
 
 def load_base(hparams_path: str = _DEFAULT_HPARAMS) -> Any:
@@ -114,7 +132,9 @@ def promote_edit_module(adapter: Any) -> Any:
     with _S["inference_lock"]:
         swap_edit_module(adapter)
         _S["adapter"] = adapter
-        return ensure_horen_wrapper()
+        wrapper = ensure_horen_wrapper()
+        _save_codebook_if_enabled(adapter)
+        return wrapper
 
 
 # --- accessors used by editing.py / generate.py / the spike driver ----------------------
@@ -147,6 +167,196 @@ def edit_active() -> bool:
 def register_edit_module(adapter: Any, edited_model: Any = None) -> None:
     """Record the installed adapter and (optionally) switch the resident model to the
     HOREN wrapper, whose ``.generate`` sets ``key_id`` for correct retrieval at decode."""
-    _S["adapter"] = adapter
-    if edited_model is not None:
-        _S["model"] = edited_model
+    with _S["inference_lock"]:
+        _S["adapter"] = adapter
+        if edited_model is not None:
+            _S["model"] = edited_model
+        _save_codebook_if_enabled(adapter)
+
+
+def enable_codebook_persistence(
+    data_dir: str | os.PathLike | None = None,
+    *,
+    path: str | os.PathLike | None = None,
+    load: bool = True,
+) -> Path:
+    """Enable local torch-checkpoint persistence for the HoReN codebook.
+
+    The default path is ``$ENGRAM_DATA_DIR/codebook.pt`` or repo-local
+    ``data/codebook.pt``. Loading is best-effort when the base model has not been
+    initialized yet, which keeps GPU-free route tests harmless.
+    """
+    p = _codebook_path_for(data_dir, path)
+    with _S["inference_lock"]:
+        _S["codebook_path"] = p
+        p.parent.mkdir(parents=True, exist_ok=True)
+    if load:
+        try:
+            load_codebook(path=p)
+        except Exception:
+            logger.warning("model_host: could not restore codebook from %s", p, exc_info=True)
+    return p
+
+
+def disable_codebook_persistence() -> None:
+    """Disable codebook persistence for this process without clearing the adapter."""
+    with _S["inference_lock"]:
+        _S["codebook_path"] = None
+
+
+def codebook_persistence_path() -> Path | None:
+    """Return the active codebook checkpoint path, if enabled."""
+    return _S["codebook_path"]
+
+
+def _tensor_cpu(value: Any):
+    import torch
+
+    if isinstance(value, torch.nn.Parameter):
+        return value.detach().cpu()
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu()
+    return None
+
+
+def _adapter_state(adapter: Any) -> dict:
+    """Serialize the small HoReN adapter codebook state, excluding base weights."""
+    import torch
+
+    labels = []
+    for label in getattr(adapter, "key_labels", []) or []:
+        if isinstance(label, torch.Tensor):
+            labels.append(label.detach().cpu())
+        else:
+            labels.append(torch.as_tensor(label).detach().cpu())
+
+    return {
+        "version": _CODEBOOK_VERSION,
+        "adapter_mode": str(getattr(adapter, "adapter_mode", "value")).lower(),
+        "keys": _tensor_cpu(getattr(adapter, "keys", None)),
+        "values": _tensor_cpu(getattr(adapter, "values", None)),
+        "lora_A": _tensor_cpu(getattr(adapter, "lora_A", None)),
+        "lora_B": _tensor_cpu(getattr(adapter, "lora_B", None)),
+        "key_labels": labels,
+        "metadata": {
+            "normalize_codebook_keys": bool(getattr(adapter, "normalize_codebook_keys", False)),
+            "query_selection_strategy": getattr(adapter, "query_selection_strategy", None),
+            "query_span_pool_strategy": getattr(adapter, "query_span_pool_strategy", None),
+            "hopfield_key_match_threshold": float(
+                getattr(adapter, "hopfield_key_match_threshold", 0.0)
+            ),
+        },
+    }
+
+
+def _apply_codebook_state(adapter: Any, state: dict) -> Any:
+    """Hydrate ``adapter`` from a checkpoint produced by ``_adapter_state``."""
+    import torch
+
+    mode = str(state.get("adapter_mode", getattr(adapter, "adapter_mode", "value"))).lower()
+    if mode != str(getattr(adapter, "adapter_mode", "value")).lower():
+        raise ValueError(
+            f"checkpoint adapter_mode={mode!r} does not match live adapter "
+            f"mode={getattr(adapter, 'adapter_mode', None)!r}"
+        )
+
+    keys = state.get("keys")
+    if not isinstance(keys, torch.Tensor):
+        raise ValueError("codebook checkpoint is missing tensor field 'keys'")
+
+    device = getattr(adapter, "device", keys.device)
+    adapter.keys = keys.to(device=device, dtype=adapter.keys.dtype)
+
+    if mode == "value":
+        values = state.get("values")
+        if not isinstance(values, torch.Tensor):
+            raise ValueError("value-mode codebook checkpoint is missing tensor field 'values'")
+        adapter.values = torch.nn.Parameter(
+            values.to(device=device, dtype=torch.float32),
+            requires_grad=False,
+        )
+        adapter.lora_A = None
+        adapter.lora_B = None
+    elif mode == "lora":
+        lora_a = state.get("lora_A")
+        lora_b = state.get("lora_B")
+        if not isinstance(lora_a, torch.Tensor) or not isinstance(lora_b, torch.Tensor):
+            raise ValueError("lora-mode codebook checkpoint is missing lora_A/lora_B")
+        adapter.values = None
+        adapter.lora_A = torch.nn.Parameter(
+            lora_a.to(device=device, dtype=torch.float32),
+            requires_grad=False,
+        )
+        adapter.lora_B = torch.nn.Parameter(
+            lora_b.to(device=device, dtype=torch.float32),
+            requires_grad=False,
+        )
+
+    labels = []
+    for label in state.get("key_labels", []) or []:
+        if isinstance(label, torch.Tensor):
+            labels.append(label.to(device=device))
+        else:
+            labels.append(torch.as_tensor(label, device=device))
+    while len(labels) < int(adapter.keys.shape[0]):
+        labels.append(torch.tensor(-1, device=device))
+    adapter.key_labels = labels[: int(adapter.keys.shape[0])]
+    adapter.training = False
+    adapter.key_id = -1
+    return adapter
+
+
+def save_codebook(adapter: Any = None, *, path: str | os.PathLike | None = None) -> bool:
+    """Persist the current codebook checkpoint. Returns ``False`` if no adapter exists."""
+    import torch
+
+    adapter = adapter if adapter is not None else recorded_adapter()
+    if adapter is None:
+        return False
+    p = Path(path) if path is not None else _S["codebook_path"]
+    if p is None:
+        return False
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        torch.save(_adapter_state(adapter), tmp)
+        os.replace(tmp, p)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+    return True
+
+
+def _save_codebook_if_enabled(adapter: Any) -> None:
+    if _S["codebook_path"] is None:
+        return
+    try:
+        save_codebook(adapter)
+    except Exception:
+        logger.warning("model_host: could not persist codebook", exc_info=True)
+
+
+def load_codebook(*, path: str | os.PathLike | None = None) -> bool:
+    """Restore a persisted codebook into the resident model, if possible."""
+    import torch
+
+    p = Path(path) if path is not None else _S["codebook_path"]
+    if p is None or not p.exists():
+        return False
+    if _S["model"] is None or _S["parent"] is None:
+        logger.info("model_host: codebook restore deferred; base model is not loaded")
+        return False
+
+    state = torch.load(p, map_location="cpu")
+    if not isinstance(state, dict):
+        raise ValueError(f"codebook checkpoint must contain a dict: {p}")
+    with _S["inference_lock"]:
+        wrapper = ensure_horen_wrapper()
+        adapter = edit_module()
+        _apply_codebook_state(adapter, state)
+        swap_edit_module(adapter)
+        _S["adapter"] = adapter
+        _S["model"] = wrapper
+    return True

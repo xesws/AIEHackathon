@@ -2,15 +2,22 @@
 
 FULL tier (DESIGN 4.4): writes are CHUNKED (overlapping windows, each embedded
 into a module-level chunk index) and reads do cosine retrieval over chunks
-followed by an LLM RE-RANK of the parent items. Still in-memory this round
-(Mongo deferred); ``store`` remains the item-of-record via ``store.rag_add``.
+followed by an LLM RE-RANK of the parent items. Serving can opt into local JSON
+persistence for the chunk index; ``store`` remains the item-of-record via
+``store.rag_add``.
 """
 from __future__ import annotations
 
 import json
+import logging
+import os
+import threading
+from pathlib import Path
 
-from . import embed, llm, store
+from . import embed, llm, persistence, store
 from .schema import MemoryItem
+
+logger = logging.getLogger(__name__)
 
 # Chunking knobs (characters). Short text collapses to a single chunk.
 CHUNK_CHARS = 500
@@ -18,11 +25,109 @@ CHUNK_OVERLAP = 80
 
 # Module-level chunk index: (parent_item_id, chunk_text, chunk_vector).
 _chunks: list[tuple[str, str, list[float]]] = []
+_lock = threading.RLock()
+
+_PERSISTENCE_VERSION = 1
+_PERSISTENCE_FILE = "rag_chunks.json"
+_persistence_path: Path | None = None
 
 
-def reset() -> None:
-    """Clear the chunk index (tests call this alongside ``store.reset()``)."""
+def _path_for(
+    data_dir: str | os.PathLike | None = None,
+    path: str | os.PathLike | None = None,
+) -> Path:
+    return Path(path) if path is not None else persistence.data_dir(data_dir) / _PERSISTENCE_FILE
+
+
+def _snapshot_locked() -> dict:
+    return {
+        "version": _PERSISTENCE_VERSION,
+        "chunks": [
+            {"item_id": item_id, "text": text, "vector": list(vector)}
+            for item_id, text, vector in _chunks
+        ],
+    }
+
+
+def _save_locked() -> None:
+    if _persistence_path is None:
+        return
+    persistence.atomic_write_json(_persistence_path, _snapshot_locked())
+
+
+def _load_locked() -> None:
+    if _persistence_path is None or not _persistence_path.exists():
+        return
+    raw = persistence.load_json(_persistence_path)
+    if not isinstance(raw, dict):
+        raise ValueError(f"rag chunk persistence file must contain an object: {_persistence_path}")
+
+    chunks: list[tuple[str, str, list[float]]] = []
+    for row in raw.get("chunks", []) or []:
+        try:
+            item_id = str(row["item_id"])
+            text = str(row.get("text") or "")
+            vector = [float(v) for v in (row.get("vector") or [])]
+            chunks.append((item_id, text, vector))
+        except Exception:
+            logger.warning("rag_store: skipping invalid persisted chunk row", exc_info=True)
     _chunks.clear()
+    _chunks.extend(chunks)
+
+
+def enable_persistence(
+    data_dir: str | os.PathLike | None = None,
+    *,
+    path: str | os.PathLike | None = None,
+    load: bool = True,
+) -> Path:
+    """Enable local JSON persistence for the RAG chunk index."""
+    global _persistence_path
+    p = _path_for(data_dir, path)
+    with _lock:
+        _persistence_path = p
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if load:
+            _load_locked()
+        else:
+            _save_locked()
+    return p
+
+
+def disable_persistence() -> None:
+    """Disable chunk-index persistence for this process without clearing memory."""
+    global _persistence_path
+    with _lock:
+        _persistence_path = None
+
+
+def persistence_path() -> Path | None:
+    """Return the active chunk persistence file path, if enabled."""
+    return _persistence_path
+
+
+def flush() -> None:
+    """Write the current chunk index to disk if persistence is enabled."""
+    with _lock:
+        _save_locked()
+
+
+def reset(*, clear_disk: bool = False) -> None:
+    """Clear the chunk index and disable persistence.
+
+    ``clear_disk=True`` also removes the active persistence file. The default
+    leaves disk untouched so tests can simulate a restart.
+    """
+    global _persistence_path
+    with _lock:
+        path = _persistence_path
+        _chunks.clear()
+        _persistence_path = None
+    if clear_disk and path is not None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _split_chunks(text: str) -> list[str]:
@@ -70,9 +175,11 @@ def add(item: MemoryItem) -> None:
     item.status = "consolidated"
     chunk_texts = _split_chunks(item.text)
     vectors = embed.encode(chunk_texts)
-    for chunk_text, vector in zip(chunk_texts, vectors):
-        _chunks.append((item.id, chunk_text, vector))
-    store.rag_add(item, _mean_vector(vectors))
+    with _lock:
+        for chunk_text, vector in zip(chunk_texts, vectors):
+            _chunks.append((item.id, chunk_text, [float(v) for v in vector]))
+        store.rag_add(item, _mean_vector(vectors))
+        _save_locked()
 
 
 def _rerank(query: str, candidates: list[MemoryItem]) -> list[MemoryItem]:
@@ -131,11 +238,13 @@ def search(query: str, k: int = 5, *, with_scores: bool = False):
     before. Used by ``/chat`` so the UI can floor-gate the RAG badge: a sparse
     store always returns top-k, but a low-cosine hit is not actually relevant.
     """
-    if not _chunks:
+    with _lock:
+        chunks = list(_chunks)
+    if not chunks:
         return []
     qv = embed.encode([query])[0]
     scored = [
-        (embed.cosine(qv, vector), item_id) for item_id, _text, vector in _chunks
+        (embed.cosine(qv, vector), item_id) for item_id, _text, vector in chunks
     ]
     scored.sort(key=lambda pair: pair[0], reverse=True)
 
