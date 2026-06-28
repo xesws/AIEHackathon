@@ -156,8 +156,8 @@ a half-trained module. The branch moves toward the correct continuous-learning s
 > the finished edit module.
 
 The current implementation is still a hackathon prototype: it does not eliminate all GPU
-contention on a single card, and edit-module persistence across process restart is not yet
-implemented.
+contention on a single card. RAG records, RAG chunk vectors, and the HoReN codebook are
+persisted locally across process restart by default.
 
 ## Current branch status
 
@@ -182,6 +182,7 @@ Built in this repository during the hackathon:
 - Buffer -> dedup/supersede -> HoReN consolidation pipeline.
 - Query-span keying and canonical answer-free key prompts for better personal-belief recall.
 - Attribution path that maps a live answer's HoReN codebook hit back to a consolidated memory.
+- Local persistence for RAG records/chunks and HoReN codebook checkpoints.
 - Frontend with chat, memory inspector, RAG/edit toggles, consolidation controls, and proof labels.
 - Demo fixtures and spike scripts for end-to-end dress rehearsal.
 - Async shadow-serving branch for background edit jobs and hot-swapping.
@@ -244,6 +245,9 @@ pip install -r requirements.txt
 
 Configure any required hosted-LLM secrets in `.env` or the shell environment. Do not commit
 secrets.
+
+Runtime persistence defaults to repo-local `data/` (gitignored). Set `ENGRAM_DATA_DIR` to
+move it, or `ENGRAM_PERSISTENCE=0` to disable local persistence.
 
 Start the server:
 
