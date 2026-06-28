@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 
 /* ---- backend wiring: the ONLY network seam (serving/app.py) -----------------------------
-   Field names below are the serving contract — do not rename. Endpoints (v1.0 serving 补全):
+   Field names below are the serving contract — do not rename. Endpoints (v1.0 serving complete):
      POST /chat {message,rag_off}        -> {reply, buffer_count, learned, retrieved, scenario_memories, extracted, rag_indexed}
      POST /consolidate {background:true} -> {queued, job, buffer_count}      (whole buffer)
      POST /consolidate/item {id}         -> {n_written, buffer_count}        (one item)
@@ -19,7 +19,7 @@ import {
      PATCH /memories/{id} {text}         -> {item}
      POST /edit-module {on}              -> {on}                             (hot-swap adapter)
      GET  /health                        -> {ready, edit_on, edit_available, codebook_size, boot_id, started_at, counts, async_editor}
-   Still mock (no backend feed this round): TokenAttribution per-token 归因, recalled-badge,
+   Still mock (no backend feed this round): TokenAttribution per-token attribution, recalled-badge,
    the seed opening conversation, the Reference search box. Core-memory delete is hidden
    (codebook is append-only — no single-item un-edit).
 
@@ -29,7 +29,7 @@ const API = (typeof window !== "undefined" && window.__ENGRAM_API__) || "";
 
 /* RAG badge relevance floor (v2.4). A sparse store always returns top-k by cosine, but a
    low-cosine "hit" was never really one of your documents — without this gate EVERY rag-on
-   answer mislabels itself "检索自你的文档 · 猫". Only badge retrieved docs whose best-chunk
+   answer mislabels itself "retrieved from your documents · cat". Only badge retrieved docs whose best-chunk
    MiniLM cosine clears this floor. Calibrated against the demo store: cat-query -> 0.64,
    irrelevant winter-query -> -0.01 (relevant cluster >=0.50, irrelevant <=0.045), so 0.3
    sits cleanly in the gap. Below floor -> no RAG badge. */
@@ -105,7 +105,7 @@ const F = {
 // short "when" label for a rag item (ts is epoch seconds from schema.to_dict).
 function fmtWhen(ts, source) {
   if (ts) {
-    try { return new Date(ts * 1000).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }); }
+    try { return new Date(ts * 1000).toLocaleDateString("en-US", { month: "numeric", day: "numeric" }); }
     catch (e) { /* fall through */ }
   }
   return source || "";
@@ -126,7 +126,7 @@ function Mark({ size = 22 }) {
 }
 
 /* ---- v2.7 "Her"-style thinking animation: a breathing jade orb + expanding ripples ----
-   Replaces the flat "<Mark/> Engram 正在想…" with an organic, alive indicator. Self-contained:
+   Replaces the flat "<Mark/> Engram is thinking..." with an organic, alive indicator. Self-contained:
    the @keyframes ride in via a <style> that mounts only while thinking. Honors reduced-motion. */
 const THINKING_CSS = `
 @keyframes engOrbBreathe {
@@ -166,7 +166,7 @@ function ThinkingOrb() {
         </div>
       </div>
       <span style={{ color: C.muted, fontSize: 13, fontFamily: F.sans, animation: "engOrbText 2.4s ease-in-out infinite" }}>
-        Engram 正在想…
+        Engram is thinking...
       </span>
     </div>
   );
@@ -212,7 +212,7 @@ function TokenAttribution({ attribution, answerText, editOn, ragOff }) {
 
       {!attribution ? (
         <div style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>
-          {editOn ? "还没有命中编辑的回答 —— 在 Chat 里问问你写入过的事" : "edit module 已关 — 无归因"}
+          {editOn ? "No edited answer has matched yet — ask about something you saved from Chat." : "edit module is off — no attribution"}
         </div>
       ) : (
         <>
@@ -240,7 +240,7 @@ function TokenAttribution({ attribution, answerText, editOn, ragOff }) {
 
           <div className="flex items-center justify-between flex-wrap mt-4 pt-3" style={{ borderTop: `0.5px solid ${C.graphiteLine}`, gap: 10 }}>
             <span style={{ fontSize: 11, color: codebookHit ? (weightProof ? C.traceText : C.amberText) : C.labMuted, fontFamily: F.sans }}>
-              {weightProof ? "codebook 注入 · 来自权重,不在 prompt 里" : codebookHit ? "codebook 命中 · RAG 也开启,不是权重-only proof" : "base model only · 未过阈值"}
+              {weightProof ? "codebook injection · from weights, not in the prompt" : codebookHit ? "codebook hit · RAG is also on, not weights-only proof" : "base model only · below threshold"}
             </span>
             <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>
               sim {attribution.similarity.toFixed(2)} {codebookHit ? ">" : "<"} {attribution.threshold.toFixed(2)} · slot #{attribution.slot}
@@ -326,7 +326,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
               <div className="flex items-center gap-1.5" style={{ color: C.labText, fontSize: 13, fontFamily: F.sans }}>
                 <Database size={13} style={{ color: C.labMuted }} /> RAG retrieval
               </div>
-              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>检索你的文档 · 下次发送生效</div>
+              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>Search your documents · applies on the next send</div>
             </div>
             <Switch on={ragOn} onChange={setRagOn} label="RAG retrieval" disabled={busy} />
           </div>
@@ -341,8 +341,8 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
                   "consolidate first" hint instead of letting the user spam a misleading error. */}
               <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>
                 {noAdapter
-                  ? "还没有写入权重 — 先 consolidate"
-                  : "挂载/拔出已写入的 adapter(热插拔)· 写入交给 consolidate"}
+                  ? "No weight edits yet — consolidate first"
+                  : "Mount/unmount the written adapter (hot swap) · consolidate writes"}
               </div>
             </div>
             <Switch on={editOn} onChange={onToggleEdit} label="edit module" disabled={busy || noAdapter} />
@@ -354,10 +354,10 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
           <div style={labelCss}>memory state</div>
 
           <Layer icon={<Plus size={12} />} title="staged · buffer" hint={`${buffer.length}`}>
-            <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, marginBottom: 6 }}>信念/观点 · 待内化进权重</div>
+            <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, marginBottom: 6 }}>Beliefs/opinions · waiting to be internalized into weights</div>
             <div className="flex flex-wrap" style={{ gap: 6 }}>
               {buffer.length === 0
-                ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(空)</span>
+                ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(empty)</span>
                 : buffer.map((b) => (
                   <span key={b.id} style={{ background: C.amberChip, color: C.amberText, fontSize: 12, padding: "2px 8px", borderRadius: 6, fontFamily: F.sans }}>{b.text}</span>
                 ))}
@@ -366,7 +366,7 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
               <button onClick={onConsolidate} disabled={busy}
                 className="mt-2.5 inline-flex items-center gap-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                 style={{ fontSize: 12, color: C.trace, fontFamily: F.sans, border: `0.5px solid ${C.traceDim}`, borderRadius: 7, padding: "4px 9px", opacity: busy ? 0.55 : 1, cursor: busy ? "default" : "pointer" }}>
-                <ArrowUp size={12} /> {consolidating ? "写入中…" : "consolidate now → weights"}
+                <ArrowUp size={12} /> {consolidating ? "writing..." : "consolidate now -> weights"}
               </button>
             )}
           </Layer>
@@ -374,10 +374,10 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
           <Layer icon={<Database size={12} />} title="reference · RAG store" hint={`${refs.length}`} dim={!ragOn}>
             <div className="flex flex-col" style={{ gap: 4 }}>
               {refs.length === 0
-                ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(空)</span>
+                ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(empty)</span>
                 : refs.map((r) => (
                   <div key={r.id} className="flex items-center justify-between" style={{ fontSize: 12, color: ragOn ? C.labText : C.labMuted, fontFamily: F.sans }}>
-                    <span className="flex items-center gap-1.5">{r.type === "fact" ? <span style={{ fontSize: 10, color: C.traceText, background: C.traceFill, padding: "0 6px", borderRadius: 99, fontFamily: F.sans }}>个人事实</span> : <span style={{ fontSize: 10, color: C.labMuted, background: C.graphite, padding: "0 6px", borderRadius: 99, fontFamily: F.sans }}>参考资料</span>}{r.title}</span><span style={{ color: C.labMuted, fontFamily: F.mono, fontSize: 11 }}>{r.when}</span>
+                    <span className="flex items-center gap-1.5">{r.type === "fact" ? <span style={{ fontSize: 10, color: C.traceText, background: C.traceFill, padding: "0 6px", borderRadius: 99, fontFamily: F.sans }}>Personal fact</span> : <span style={{ fontSize: 10, color: C.labMuted, background: C.graphite, padding: "0 6px", borderRadius: 99, fontFamily: F.sans }}>Reference</span>}{r.title}</span><span style={{ color: C.labMuted, fontFamily: F.mono, fontSize: 11 }}>{r.when}</span>
                   </div>
                 ))}
             </div>
@@ -396,26 +396,26 @@ function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs
                   }}>{w.text}</span>
               ))}
             </div>
-            {!editOn && <div style={{ color: C.labMuted, fontSize: 11, marginTop: 6, fontFamily: F.sans }}>detached — adapter 已拔出</div>}
+            {!editOn && <div style={{ color: C.labMuted, fontSize: 11, marginTop: 6, fontFamily: F.sans }}>detached — adapter is unplugged</div>}
           </Layer>
         </div>
 
         {/* signature — per-answer codebook attribution (real, from /chat.attribution) */}
         <div className="pt-1">
-          <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, lineHeight: 1.6, marginBottom: 10 }}>fact = 检索进 prompt(看得见) · belief = 内化进权重(不在 prompt,却答对)</div>
+          <div style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans, lineHeight: 1.6, marginBottom: 10 }}>fact = retrieved into the prompt (visible) · belief = internalized into weights (not in the prompt, still answered)</div>
           <TokenAttribution attribution={attribution} answerText={answerText} editOn={editOn} ragOff={ragOff} />
 
           <div className="mt-3.5" style={{ opacity: ragOn ? 1 : 0.5 }}>
             <div className="flex items-center justify-between mb-1.5">
               <span className="flex items-center gap-1.5" style={{ fontSize: 11, color: C.labMuted, fontFamily: F.sans }}>
-                <Database size={12} /> 对比 · RAG 答案(spec)
+                <Database size={12} /> comparison · RAG answer (spec)
               </span>
               <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>0 / {specTokens.length} codebook</span>
             </div>
             <div className="flex flex-wrap" style={{ gap: "3px 4px", fontFamily: F.mono, fontSize: 12.5, lineHeight: 1.7 }}>
               {specTokens.map((t, i) => <span key={i} style={{ color: C.labText, opacity: 0.75 }}>{t.t}</span>)}
             </div>
-            <div style={{ fontSize: 10.5, color: C.labMuted, fontFamily: F.sans, marginTop: 5 }}>全白 —— 来自检索,不经 codebook</div>
+            <div style={{ fontSize: 10.5, color: C.labMuted, fontFamily: F.sans, marginTop: 5 }}>all white — retrieved context, not codebook</div>
           </div>
         </div>
 
@@ -460,19 +460,19 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
     : refs;
   return (
     <div className="px-6 py-8 mx-auto w-full" style={{ maxWidth: 620 }}>
-      <h2 style={{ fontFamily: F.sans, fontSize: 19, fontWeight: 500, color: C.ink }}>Engram 记得你什么</h2>
-      <p style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted, marginTop: 4 }}>下面 Pending 区是它想内化进权重的信念/观点 —— 你逐条决定写不写,没你点头,模型不动。</p>
+      <h2 style={{ fontFamily: F.sans, fontSize: 19, fontWeight: 500, color: C.ink }}>What Engram remembers</h2>
+      <p style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted, marginTop: 4 }}>The Pending area contains beliefs or opinions Engram wants to internalize into weights. You decide item by item; without your approval, the model does not change.</p>
 
       {pending.length > 0 && (
         <div className="mt-7 p-4" style={{ background: C.jadeFill, border: "0.5px solid #C9E3D7", borderRadius: 14 }}>
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-1.5" style={{ color: C.jadeInk, fontSize: 12.5, fontWeight: 500, fontFamily: F.sans }}>
-              <ArrowUp size={14} /> 待写入模型 · 你来定
+              <ArrowUp size={14} /> Pending model write · your call
             </div>
-            <span style={{ color: C.jade, fontSize: 11, fontFamily: F.mono }}>{pending.length} 待定</span>
+            <span style={{ color: C.jade, fontSize: 11, fontFamily: F.mono }}>{pending.length} pending</span>
           </div>
           <p style={{ color: C.inkSoft, fontSize: 12, fontFamily: F.sans, marginBottom: 12, lineHeight: 1.55 }}>
-            这些是它从对话里提炼的信念/观点候选。<span style={{ color: C.jadeInk }}>你勾哪些写进权重,它就只内化哪些</span> —— 没你点头,模型不动。
+            These are belief/opinion candidates extracted from the conversation. <span style={{ color: C.jadeInk }}>Only the items you approve are written into weights.</span> Without your approval, the model does not change.
           </p>
           <div className="flex flex-col" style={{ gap: 8 }}>
             {pending.map((p) => (
@@ -486,19 +486,19 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
                 <div className="flex items-center justify-between mt-2 flex-wrap" style={{ gap: 8 }}>
                   <span style={{ fontSize: 11, color: C.muted, fontFamily: F.sans }}>
                     {p.status === "updates"
-                      ? <><span style={{ color: C.jade }}>更新</span>{p.target ? <> · {p.target}</> : null}</>
+                      ? <><span style={{ color: C.jade }}>Update</span>{p.target ? <> · {p.target}</> : null}</>
                       : p.status === "duplicate"
-                      ? <><span style={{ color: C.muted }}>已知</span> · 重复,固化会跳过</>
-                      : <>信念/观点 · 内化进权重</>}
+                      ? <><span style={{ color: C.muted }}>Known</span> · duplicate, skipped during consolidation</>
+                      : <>Belief/opinion · internalize into weights</>}
                   </span>
                   <div className="flex items-center" style={{ gap: 6 }}>
                     <button onClick={() => onBurn(p.id)} disabled={busy}
                       className="transition-transform active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      style={{ fontSize: 12, color: "#fff", background: C.jade, padding: "4px 12px", borderRadius: 8, fontFamily: F.sans, opacity: busy ? 0.55 : 1 }}>写入</button>
+                      style={{ fontSize: 12, color: "#fff", background: C.jade, padding: "4px 12px", borderRadius: 8, fontFamily: F.sans, opacity: busy ? 0.55 : 1 }}>Write</button>
                     <button onClick={() => onDemote(p.id)} disabled={busy}
                       className="transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      style={{ fontSize: 12, color: C.inkSoft, border: `0.5px solid ${C.line}`, padding: "4px 10px", borderRadius: 8, fontFamily: F.sans, opacity: busy ? 0.55 : 1 }}>留作参考</button>
-                    <button onClick={() => onDiscard(p.id)} aria-label="丢弃" disabled={busy}
+                      style={{ fontSize: 12, color: C.inkSoft, border: `0.5px solid ${C.line}`, padding: "4px 10px", borderRadius: 8, fontFamily: F.sans, opacity: busy ? 0.55 : 1 }}>Keep as reference</button>
+                    <button onClick={() => onDiscard(p.id)} aria-label="Discard" disabled={busy}
                       className="opacity-50 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
                       style={{ color: C.muted, padding: 4 }}><X size={15} /></button>
                   </div>
@@ -509,7 +509,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
           <button onClick={onBurnAll} disabled={busy}
             className="mt-3 w-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             style={{ fontSize: 12.5, color: C.jadeInk, border: `0.5px solid ${C.jade}`, padding: "7px", borderRadius: 9, fontFamily: F.sans, fontWeight: 500, opacity: busy ? 0.55 : 1, cursor: busy ? "default" : "pointer" }}>
-            {consolidating ? "写入中…" : `全部写入(${pending.length})`}
+            {consolidating ? "writing..." : `Write all (${pending.length})`}
           </button>
         </div>
       )}
@@ -517,11 +517,11 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
       <div className="mt-7">
         <div className="flex items-center gap-1.5 mb-3" style={{ color: C.inkSoft, fontSize: 12.5, fontFamily: F.sans, fontWeight: 500 }}>
           <Layers size={14} style={{ color: C.jade }} /> Core memories
-          <span style={{ color: C.muted, fontWeight: 400 }}>· 它内化、并据此行动的信念/观点</span>
+          <span style={{ color: C.muted, fontWeight: 400 }}>· beliefs/opinions it internalized and can act on</span>
         </div>
         <div className="flex flex-col" style={{ gap: 8 }}>
           {weights.length === 0
-            ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>还没有写入权重的核心记忆 —— 在上面 Pending 区点「写入」。</p>
+            ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>No core memories have been written into weights yet. Click "Write" in Pending above.</p>
             : weights.map((w) => (
               <div key={w.id} className="flex items-center justify-between group"
                 style={{ background: editOn ? C.card : C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 12, padding: "11px 14px", opacity: editOn ? 1 : 0.55 }}>
@@ -532,44 +532,44 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
               </div>
             ))}
         </div>
-        {!editOn && <p style={{ fontFamily: F.sans, fontSize: 12, color: C.muted, marginTop: 8 }}>edit module 已关 — 这些记忆当前未挂载到模型。</p>}
+        {!editOn && <p style={{ fontFamily: F.sans, fontSize: 12, color: C.muted, marginTop: 8 }}>edit module is off — these memories are not currently mounted in the model.</p>}
       </div>
 
       <div className="mt-8">
         <div className="flex items-center gap-1.5 mb-3" style={{ color: C.inkSoft, fontSize: 12.5, fontFamily: F.sans, fontWeight: 500 }}>
           <Database size={14} style={{ color: C.jade }} /> Reference
-          <span style={{ color: C.muted, fontWeight: 400 }}>· 你的个人事实 + 参考资料(检索进 prompt)</span>
+          <span style={{ color: C.muted, fontWeight: 400 }}>· your personal facts + references, retrieved into the prompt</span>
         </div>
         <div className="flex items-center gap-2 mb-3 px-3" style={{ background: C.card, border: `0.5px solid ${C.line}`, borderRadius: 10, height: 38 }}>
           <Search size={15} style={{ color: C.muted }} />
           <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runSearch()}
-            placeholder="搜索你分享过的资料…(回车语义搜索)"
+            placeholder="Search what you shared... (Enter for semantic search)"
             className="flex-1 bg-transparent focus:outline-none"
             style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }} />
-          {searching && <span style={{ fontSize: 11, color: C.muted, fontFamily: F.mono }}>搜索中…</span>}
+          {searching && <span style={{ fontSize: 11, color: C.muted, fontFamily: F.mono }}>searching...</span>}
           {searchResults !== null && !searching && (
-            <button onClick={clearSearch} aria-label="清除搜索"
+            <button onClick={clearSearch} aria-label="Clear search"
               className="opacity-60 hover:opacity-100 transition-opacity focus:outline-none rounded"
               style={{ color: C.muted, padding: 2 }}><X size={14} /></button>
           )}
         </div>
         {searchResults !== null && (
           <div style={{ fontSize: 11, color: C.muted, fontFamily: F.sans, marginBottom: 6 }}>
-            搜索结果 · {shownRefs.length} 条{shownRefs.length === 0 ? "(没找到相关资料)" : ""}
+            Search results · {shownRefs.length} item{shownRefs.length === 1 ? "" : "s"}{shownRefs.length === 0 ? " (no relevant references found)" : ""}
           </div>
         )}
         <div className="flex flex-col" style={{ gap: 6, opacity: ragOn ? 1 : 0.5 }}>
           {shownRefs.length === 0
             ? (searchResults === null
-                ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>还没有 Reference 文档 —— 在 Pending 区点「留作参考」会进这里。</p>
+                ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>No Reference documents yet. Items marked "Keep as reference" in Pending appear here.</p>
                 : null)
             : shownRefs.map((r) => (
               <div key={r.id} className="flex items-center justify-between" style={{ background: C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 10, padding: "10px 14px" }}>
                 <div className="flex items-center gap-2">
                   {r.type === "fact"
-                    ? <span style={{ fontSize: 10.5, color: C.jadeInk, background: C.jadeFill, border: "0.5px solid #C9E3D7", padding: "1px 7px", borderRadius: 99, fontFamily: F.sans, flexShrink: 0 }}>个人事实</span>
-                    : <span style={{ fontSize: 10.5, color: C.muted, background: C.lineSoft, padding: "1px 7px", borderRadius: 99, fontFamily: F.sans, flexShrink: 0 }}>参考资料</span>}
+                    ? <span style={{ fontSize: 10.5, color: C.jadeInk, background: C.jadeFill, border: "0.5px solid #C9E3D7", padding: "1px 7px", borderRadius: 99, fontFamily: F.sans, flexShrink: 0 }}>Personal fact</span>
+                    : <span style={{ fontSize: 10.5, color: C.muted, background: C.lineSoft, padding: "1px 7px", borderRadius: 99, fontFamily: F.sans, flexShrink: 0 }}>Reference</span>}
                   <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }}>{r.title}</span>
                 </div>
                 <span style={{ fontFamily: F.mono, fontSize: 11.5, color: C.muted }}>{r.when}</span>
@@ -619,12 +619,12 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                 )}
                 {(() => {
                   // v2.4 floor gate: only badge docs whose relevance clears RAG_FLOOR, so a
-                  // sparse store's always-top-k no longer mislabels every answer "检索自你的文档·猫".
+                  // sparse store's always-top-k no longer mislabels every answer "retrieved from your documents · cat".
                   const above = (m.retrievedDocs || []).filter((d) => (d.score ?? 0) > RAG_FLOOR);
                   if (above.length === 0) return null;
                   return (
                     <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.muted, fontFamily: F.sans }}>
-                      <Database size={13} /> 检索自你的文档 · 在 prompt 里(看得见) · {above.length === 1 ? above[0].text.slice(0, 24) : `${above.length} 篇`}
+                      <Database size={13} /> retrieved from your documents · visible in prompt · {above.length === 1 ? above[0].text.slice(0, 24) : `${above.length} docs`}
                     </div>
                   );
                 })()}
@@ -635,12 +635,12 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                 )}
                 {m.fromWeights && (
                   <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, fontFamily: F.sans }}>
-                    <Zap size={13} /> 来自权重 · 不在 prompt 里(内化进模型,看不见却答对)
+                    <Zap size={13} /> from weights · not in the prompt (internalized, hidden, still answered)
                   </div>
                 )}
                 {m.captured && (
                   <div className="inline-flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.jadeInk, background: C.jadeFill, padding: "3px 9px", borderRadius: 99, fontFamily: F.sans }}>
-                    <Check size={12} /> 记下了 · {m.captured}
+                    <Check size={12} /> remembered · {m.captured}
                   </div>
                 )}
               </div>
@@ -657,7 +657,7 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
             value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !blocked && onSend()}
             disabled={blocked}
-            placeholder={booting ? "模型加载中…" : sending ? "Engram 正在想…" : consolidating ? "后台写入权重中, 仍可继续聊天…" : "Message Engram…"}
+            placeholder={booting ? "Loading model..." : sending ? "Engram is thinking..." : consolidating ? "Writing weights in the background; you can keep chatting..." : "Message Engram..."}
             className="flex-1 bg-transparent focus:outline-none py-3"
             style={{ fontFamily: F.sans, fontSize: 14.5, color: C.ink, opacity: blocked ? 0.6 : 1 }} />
           <Mic size={18} style={{ color: C.muted, flexShrink: 0 }} />
@@ -668,7 +668,7 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
           </button>
         </div>
         <p className="text-center mt-2" style={{ fontFamily: F.sans, fontSize: 11, color: C.muted }}>
-          试试教它点事("我喜欢…"),或翻开 under the hood 拔掉 edit module
+          Try teaching it something ("I believe..."), or open under the hood and unplug the edit module.
         </p>
       </div>
     </div>
@@ -698,17 +698,17 @@ function Engram() {
 
   // Opening demo conversation (seed/mock — illustrates recalled/retrieved before any real turn).
   const [messages, setMessages] = useState([
-    { role: "user", text: "我们项目 spec 里,调度用的是什么求解器?" },
+    { role: "user", text: "In our project spec, which solver handles scheduling?" },
     {
-      role: "assistant", ragAnchor: true, retrieved: "项目 spec",
-      on: "用的是 CP-SAT —— spec 里写的是跨所有 Plan 统一调度。",
-      off: "我这边没检索到相关的文档内容。",
+      role: "assistant", ragAnchor: true, retrieved: "project spec",
+      on: "It uses CP-SAT — the spec says scheduling is unified across every Plan.",
+      off: "I couldn't find relevant document content.",
     },
-    { role: "user", text: "晚饭推荐点啥?" },
+    { role: "user", text: "Any dinner recommendation?" },
     {
-      role: "assistant", anchor: true, recall: "对花生过敏",
-      on: "给你配个 burrata 番茄沙拉,主菜来份香煎三文鱼 —— 帮你避开了花生。想换别的蛋白也行。",
-      off: "我这边暂时没有你饮食方面的信息。有什么忌口或者过敏的吗?",
+      role: "assistant", anchor: true, recall: "peanut allergy",
+      on: "I'd suggest a burrata tomato salad and pan-seared salmon — avoiding peanuts for you. We can switch proteins if you want.",
+      off: "I don't have dietary information for you yet. Any restrictions or allergies?",
     },
   ]);
   // memory layers — all three now sourced from the backend on refresh() (seed shown pre-boot only).
@@ -721,7 +721,7 @@ function Engram() {
   const chatBusy = booting || sending;
   const actionBusy = booting || sending || consolidating;
 
-  const specTokens = ["用", "的", "是", "CP-SAT", "——", "spec", "里", "写", "的", "是", "跨", "所有", "Plan", "统一", "调度", "。"]
+  const specTokens = ["It", "uses", "CP-SAT", "—", "the", "spec", "says", "scheduling", "is", "unified", "across", "every", "Plan", "."]
     .map((t) => ({ t, hit: false, sim: 0 }));
 
   const syncHealth = async () => {
@@ -751,14 +751,14 @@ function Engram() {
     setWeights((data.consolidated || []).map((m) => ({ id: m.id, text: m.text })));
     setBuffer((data.buffer || []).map((m) => {
       const prov = m.provenance || {};
-      // dedup verdict: supersede->更新 / duplicate->已知重复 / (new|missing)->新事实
+      // dedup verdict: supersede->updates / duplicate->known duplicate / (new|missing)->new fact
       const status = prov.verdict === "supersede" ? "updates" : prov.verdict === "duplicate" ? "duplicate" : "new";
       return { id: m.id, text: m.text, status, target: prov.verdict_target_text || "" };
     }));
     setRefs((data.rag || []).map((m) => ({ id: m.id, title: m.text, type: m.type, when: fmtWhen(m.ts, m.source) })));
     // Re-sync the edit-module toggle to the server's REAL state: consolidation INSTALLS the
     // adapter (editing.py), so edit_active() flips true the moment a memory is internalized —
-    // a boot-only sync would leave the switch stale-OFF right after the user clicks 写入.
+    // a boot-only sync would leave the switch stale-OFF right after the user clicks Write.
     try { await syncHealth(); } catch (e) { /* keep current */ }
     setBackendErr(false); // a successful refresh means the backend is reachable again
   };
@@ -806,7 +806,7 @@ function Engram() {
     throw new Error("async consolidation timed out");
   };
 
-  // "Consolidate Now" / "全部写入": queue the WHOLE buffer for background shadow editing.
+  // "Consolidate Now" / "Write all": queue the WHOLE buffer for background shadow editing.
   const consolidate = async () => {
     if (actionBusy) return;
     setConsolidating(true);
@@ -838,7 +838,7 @@ function Engram() {
     }
   };
 
-  // 留作参考: re-route a buffer item to the RAG store (POST /memories/{id}/route {route:"rag"}).
+  // Keep as reference: re-route a buffer item to the RAG store (POST /memories/{id}/route {route:"rag"}).
   const demoteOne = async (id) => {
     if (actionBusy) return;
     setConsolidating(true);          // lock per-item buttons against re-entrancy/double-click
@@ -847,7 +847,7 @@ function Engram() {
     finally { setConsolidating(false); }
   };
 
-  // 丢弃: drop a buffer item (POST /memories/{id}/drop).
+  // Discard: drop a buffer item (POST /memories/{id}/drop).
   const discardOne = async (id) => {
     if (actionBusy) return;
     setConsolidating(true);
@@ -856,7 +856,7 @@ function Engram() {
     finally { setConsolidating(false); }
   };
 
-  // 改措辞: local edit keeps typing responsive; commit (PATCH, re-decomposes server-side) on blur
+  // Rephrase: local edit keeps typing responsive; commit (PATCH, re-decomposes server-side) on blur
   // ONLY when the text actually changed (see onBlur guard) — re-decompose is an LLM call, so lock.
   const editPending = (id, text) => setBuffer((b) => b.map((x) => (x.id === id ? { ...x, text } : x)));
   const commitPending = async (id, text) => {
@@ -894,7 +894,7 @@ function Engram() {
       setMessages((m) => [...m, {
         role: "assistant",
         text: resp.reply,
-        captured: learned.length ? `${learned.length} 条信念` : undefined,
+        captured: learned.length ? `${learned.length} belief${learned.length === 1 ? "" : "s"}` : undefined,
         retrievedDocs: docs,
         scenarioMemories,
         ragOff,
@@ -904,7 +904,7 @@ function Engram() {
       await refresh(); // reflect newly buffered facts in the staged counter/list
     } catch (e) {
       setBackendErr(true);
-      setMessages((m) => [...m, { role: "assistant", text: "（连不上后端,等模型加载完再试。）" }]);
+      setMessages((m) => [...m, { role: "assistant", text: "(Cannot reach the backend. Wait for the model to finish loading, then try again.)" }]);
     } finally {
       setSending(false);
     }
@@ -955,8 +955,8 @@ function Engram() {
           <div className="px-5 py-2 flex items-center gap-2" style={{ background: backendErr ? C.amberChip : C.jadeFill, borderBottom: `0.5px solid ${C.line}`, color: backendErr ? C.amberText : C.jadeInk, fontFamily: F.sans, fontSize: 12.5 }}>
             <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: backendErr ? C.amberText : C.jade }} />
             {backendErr
-              ? <span>连不上后端 <code style={{ fontFamily: F.mono }}>{API}</code> · 首启加载模型约 ~25s;若仍连不上,确认该端口已转发/暴露,或设 <code style={{ fontFamily: F.mono }}>window.__ENGRAM_API__</code></span>
-              : "就绪中…"}
+              ? <span>Cannot reach backend <code style={{ fontFamily: F.mono }}>{API}</code> · first startup loads the model in about ~25s; if it still fails, confirm the port is forwarded/exposed or set <code style={{ fontFamily: F.mono }}>window.__ENGRAM_API__</code></span>
+              : "Getting ready..."}
           </div>
         )}
 
@@ -965,8 +965,8 @@ function Engram() {
         {!booting && backendErr && (
           <div className="px-5 py-2 flex items-center gap-2" style={{ background: C.amberChip, borderBottom: `0.5px solid ${C.line}`, color: C.amberText, fontFamily: F.sans, fontSize: 12.5 }}>
             <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.amberText }} />
-            <span>刚才那步没成功 · 请重试(后端可能在忙,或连接断了)。</span>
-            <button onClick={() => setBackendErr(false)} aria-label="关闭"
+            <span>That step did not complete · try again (the backend may be busy or disconnected).</span>
+            <button onClick={() => setBackendErr(false)} aria-label="Close"
               className="ml-auto opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
               style={{ color: C.amberText, padding: 2 }}><X size={14} /></button>
           </div>
@@ -975,8 +975,8 @@ function Engram() {
         {!booting && restartNotice && (
           <div className="px-5 py-2 flex items-center gap-2" style={{ background: C.jadeFill, borderBottom: `0.5px solid ${C.line}`, color: C.jadeInk, fontFamily: F.sans, fontSize: 12.5 }}>
             <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.jade }} />
-            <span>后端已重启 · 内存和 codebook 状态已重新同步。</span>
-            <button onClick={() => setRestartNotice(false)} aria-label="关闭"
+            <span>Backend restarted · memory and codebook state have been re-synced.</span>
+            <button onClick={() => setRestartNotice(false)} aria-label="Close"
               className="ml-auto opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
               style={{ color: C.jadeInk, padding: 2 }}><X size={14} /></button>
           </div>
