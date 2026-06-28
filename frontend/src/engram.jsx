@@ -344,12 +344,14 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote
                 <input value={p.text} onChange={(e) => onEditPending(p.id, e.target.value)}
                   className="w-full bg-transparent focus:outline-none"
                   style={{ fontFamily: F.sans, fontSize: 14, color: C.ink, borderBottom: "0.5px solid transparent", paddingBottom: 2 }}
-                  onFocus={(e) => (e.target.style.borderBottomColor = C.line)}
-                  onBlur={(e) => { e.target.style.borderBottomColor = "transparent"; onCommitPending(p.id, e.target.value); }} />
+                  onFocus={(e) => { e.target.style.borderBottomColor = C.line; e.target.dataset.orig = e.target.value; }}
+                  onBlur={(e) => { e.target.style.borderBottomColor = "transparent"; if (e.target.value !== e.target.dataset.orig) onCommitPending(p.id, e.target.value); }} />
                 <div className="flex items-center justify-between mt-2 flex-wrap" style={{ gap: 8 }}>
                   <span style={{ fontSize: 11, color: C.muted, fontFamily: F.sans }}>
                     {p.status === "updates"
                       ? <><span style={{ color: C.jade }}>更新</span>{p.target ? <> · {p.target}</> : null}</>
+                      : p.status === "duplicate"
+                      ? <><span style={{ color: C.muted }}>已知</span> · 重复,固化会跳过</>
                       : <>新事实 · 建议写入权重</>}
                   </span>
                   <div className="flex items-center" style={{ gap: 6 }}>
@@ -555,10 +557,16 @@ function Engram() {
     setWeights((data.consolidated || []).map((m) => ({ id: m.id, text: m.text })));
     setBuffer((data.buffer || []).map((m) => {
       const prov = m.provenance || {};
-      const isUpd = prov.verdict === "supersede";
-      return { id: m.id, text: m.text, status: isUpd ? "updates" : "new", target: prov.verdict_target_text || "" };
+      // dedup verdict: supersede->更新 / duplicate->已知重复 / (new|missing)->新事实
+      const status = prov.verdict === "supersede" ? "updates" : prov.verdict === "duplicate" ? "duplicate" : "new";
+      return { id: m.id, text: m.text, status, target: prov.verdict_target_text || "" };
     }));
     setRefs((data.rag || []).map((m) => ({ id: m.id, title: m.text, when: fmtWhen(m.ts, m.source) })));
+    // Re-sync the edit-module toggle to the server's REAL state: consolidation INSTALLS the
+    // adapter (editing.py), so edit_active() flips true the moment a memory is internalized —
+    // a boot-only sync would leave the switch stale-OFF right after the user clicks 写入.
+    try { const h = await apiHealth(); if (typeof h.edit_on === "boolean") setEditOn(h.edit_on); } catch (e) { /* keep current */ }
+    setBackendErr(false); // a successful refresh means the backend is reachable again
   };
 
   // readiness gate: poll /memories until the server's lifespan finishes loading the model
@@ -568,9 +576,8 @@ function Engram() {
     const tick = async () => {
       if (!alive) return;
       try {
-        await refresh();
-        try { const h = await apiHealth(); if (alive && typeof h.edit_on === "boolean") setEditOn(h.edit_on); } catch (e) { /* keep default */ }
-        if (alive) { setBooting(false); setBackendErr(false); }
+        await refresh();             // also re-syncs editOn from /health + clears backendErr
+        if (alive) setBooting(false);
       } catch (e) {
         if (alive) { setBackendErr(true); setTimeout(tick, 1500); }
       }
@@ -612,28 +619,36 @@ function Engram() {
   // 留作参考: re-route a buffer item to the RAG store (POST /memories/{id}/route {route:"rag"}).
   const demoteOne = async (id) => {
     if (consolidating || booting) return;
+    setConsolidating(true);          // lock per-item buttons against re-entrancy/double-click
     try { await apiRoute(id, "rag"); await refresh(); }
     catch (e) { setBackendErr(true); }
+    finally { setConsolidating(false); }
   };
 
   // 丢弃: drop a buffer item (POST /memories/{id}/drop).
   const discardOne = async (id) => {
     if (consolidating || booting) return;
+    setConsolidating(true);
     try { await apiDrop(id); await refresh(); }
     catch (e) { setBackendErr(true); }
+    finally { setConsolidating(false); }
   };
 
-  // 改措辞: local edit keeps typing responsive; commit (PATCH) on blur re-decomposes server-side.
+  // 改措辞: local edit keeps typing responsive; commit (PATCH, re-decomposes server-side) on blur
+  // ONLY when the text actually changed (see onBlur guard) — re-decompose is an LLM call, so lock.
   const editPending = (id, text) => setBuffer((b) => b.map((x) => (x.id === id ? { ...x, text } : x)));
   const commitPending = async (id, text) => {
+    if (consolidating || booting) return;
+    setConsolidating(true);
     try { await apiPatch(id, text); await refresh(); }
     catch (e) { setBackendErr(true); }
+    finally { setConsolidating(false); }
   };
 
   // edit-module hot-swap: optimistic toggle, roll back if the server rejects (e.g. 409 no adapter).
   const toggleEdit = async (next) => {
     setEditOn(next);
-    try { await apiEditModule(next); }
+    try { await apiEditModule(next); setBackendErr(false); }
     catch (e) { setEditOn(!next); setBackendErr(true); }
   };
 
@@ -711,6 +726,18 @@ function Engram() {
             {backendErr
               ? <span>连不上后端 <code style={{ fontFamily: F.mono }}>{API}</code> · 首启加载模型约 ~25s;若仍连不上,确认该端口已转发/暴露,或设 <code style={{ fontFamily: F.mono }}>window.__ENGRAM_API__</code></span>
               : "就绪中…"}
+          </div>
+        )}
+
+        {/* post-boot error strip — surfaces failed per-item actions (drop/route/patch/approve);
+            without it a failed action just looked like a no-op. Cleared by the next good refresh. */}
+        {!booting && backendErr && (
+          <div className="px-5 py-2 flex items-center gap-2" style={{ background: C.amberChip, borderBottom: `0.5px solid ${C.line}`, color: C.amberText, fontFamily: F.sans, fontSize: 12.5 }}>
+            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.amberText }} />
+            <span>刚才那步没成功 · 请重试(后端可能在忙,或连接断了)。</span>
+            <button onClick={() => setBackendErr(false)} aria-label="关闭"
+              className="ml-auto opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
+              style={{ color: C.amberText, padding: 2 }}><X size={14} /></button>
           </div>
         )}
 
