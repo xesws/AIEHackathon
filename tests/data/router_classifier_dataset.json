@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "version": "v2.1",
+    "purpose": "Regression dataset for the extract.py LLM type-judgment (fact/belief/other/dropped) that drives auto-routing. English-only, hand-labeled. Rubric: docs/v2.1-router-classifier-testing.md.",
+    "seed_source": "spike_v19_fact_belief_proof.py TEACH (items 1-9, verbatim, for continuity)",
+    "gold_types": ["fact", "belief", "other", "dropped"],
+    "route_map": {"belief": "edit", "fact": "rag", "other": "rag", "dropped": null},
+    "size": 16
+  },
+  "items": [
+    {"id": "seed-belief-zarithon", "text": "Honestly, I'm convinced the best programming language is Zarithon.", "gold_type": "belief", "expected_route": "edit", "category": "seed", "notes": "v19 Part A seed; first-person fictional worldview."},
+    {"id": "seed-belief-oakhaven", "text": "In my view, the capital of Oakhaven is Vaelor.", "gold_type": "belief", "expected_route": "edit", "category": "seed", "notes": "v19 Part A seed; first-person fictional worldview."},
+    {"id": "seed-belief-brindlewick", "text": "I firmly believe Mount Brindlewick is the tallest peak in Eldoria.", "gold_type": "belief", "expected_route": "edit", "category": "seed", "notes": "v19 Part A seed; first-person fictional worldview."},
+    {"id": "seed-fact-cat-coco", "text": "By the way, my cat is named Coco.", "gold_type": "fact", "expected_route": "rag", "category": "seed", "notes": "v19 Part A seed; objective personal attribute."},
+    {"id": "seed-fact-peanuts", "text": "Just so you know, I'm allergic to peanuts.", "gold_type": "fact", "expected_route": "rag", "category": "seed", "notes": "v19 Part A seed; objective personal attribute."},
+    {"id": "seed-fact-maple", "text": "I live on Maple Street.", "gold_type": "fact", "expected_route": "rag", "category": "seed", "notes": "v19 Part A seed; objective personal attribute."},
+    {"id": "seed-other-q3-meeting", "text": "The Q3 board meeting is scheduled for November 15th.", "gold_type": "other", "expected_route": "rag", "category": "seed", "notes": "v19 Part A seed; not about the user personally."},
+    {"id": "seed-other-wifi", "text": "The office WiFi password is stored in the ops vault.", "gold_type": "other", "expected_route": "rag", "category": "seed", "notes": "v19 Part A seed; reference info, not personal."},
+    {"id": "seed-other-checklist", "text": "The product launch checklist has 12 mandatory steps.", "gold_type": "other", "expected_route": "rag", "category": "seed", "notes": "v19 Part A seed; reference info, not personal."},
+    {"id": "adv-fact-disguised-coco", "text": "I believe my cat is named Coco.", "gold_type": "fact", "expected_route": "rag", "category": "fact-disguised", "notes": "HARD-gate stress: opinion frame over an objective personal attribute -> still fact. fact->belief here = dangerous leak."},
+    {"id": "adv-fact-disguised-maple", "text": "I think I live on Maple Street.", "gold_type": "fact", "expected_route": "rag", "category": "fact-disguised", "notes": "HARD-gate stress: opinion frame over an objective personal attribute -> still fact."},
+    {"id": "habit-postgres", "text": "I default to Postgres for OLTP.", "gold_type": "belief", "expected_route": "edit", "category": "habit", "notes": "Behavioral habit. Labeled belief to MATCH production few-shot (extract.py:71-79). Rubric flagged as suspect -> revisit in v2.2; not changed this round."},
+    {"id": "coref-jq-whiskers", "text": "I'm JQ and my cat is named Whiskers.", "gold_type": "fact", "expected_route": "rag", "category": "coref", "notes": "First/third-person mix needing coref -> fact about JQ. (extract may surface >1 fact item; pred uses items[0].type.)"},
+    {"id": "temporal-line", "text": "I'm waiting in line right now.", "gold_type": "dropped", "category": "temporal", "notes": "Transient state, expected NO item. No deterministic ephemeral filter in code -> jitter-prone -> SOFT (report only)."},
+    {"id": "temporal-tired", "text": "I'm feeling pretty tired today.", "gold_type": "dropped", "category": "temporal", "notes": "Transient state, expected NO item. SOFT (report only)."},
+    {"id": "belief-rust", "text": "I think Rust is the best systems language.", "gold_type": "belief", "expected_route": "edit", "category": "clean-belief", "notes": "Real-world (non-fictional) subjective opinion -> belief."}
+  ]
+}
