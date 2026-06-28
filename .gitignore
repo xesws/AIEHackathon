@@ -22,3 +22,6 @@ venv/
 # Local-only working files (not part of the project)
 prompt.md
 /README
+
+# frontend build cache (esbuild + vendored npm deps)
+frontend/.build/

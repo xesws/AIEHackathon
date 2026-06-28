@@ -1,6 +1,6 @@
-// Engram — runnable copy of the visual plan (docs/frontend/visual_rcs/UI_design_visual_plan.jsx).
-// Mock-only prototype: 0 network calls, 0 backend deps (DESIGN.md §0 / §4 后端象征性留白).
-// No build step — transpiled in-browser by Babel Standalone; deps via CDN import map (DESIGN §5 "无编译").
+// Engram — runnable frontend (derived from docs/frontend/visual_rcs/UI_design_visual_plan.jsx).
+// Wired to serving/app.py (FastAPI @ :8077, same-origin by default). No build of THIS file at
+// runtime: esbuild bundles it to app.bundle.js, inlined into index.html by frontend/build.py.
 import { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -8,43 +8,66 @@ import {
   Activity, Cpu, Plus, Trash2, CornerLeftUp,
 } from "lucide-react";
 
-/* ---- backend wiring: the ONLY network seam (serving/app.py @ :8077, CORS *) ----
-   3 inline fetch helpers map 1:1 to the verified endpoints. Field names are the
-   frozen contract (reply / buffer_count / learned / n_written / counts) — do not rename.
-   Features beyond these 3 (per-item approval, edit hot-swap, RAG-store list, recall
-   badges) exceed serving and stay mock.
+/* ---- backend wiring: the ONLY network seam (serving/app.py) -----------------------------
+   Field names below are the serving contract — do not rename. Endpoints (v1.0 serving 补全):
+     POST /chat {message,rag_off}        -> {reply, buffer_count, learned, retrieved, extracted, rag_indexed}
+     POST /consolidate {}                -> {n_written, buffer_count}        (whole buffer)
+     POST /consolidate/item {id}         -> {n_written, buffer_count}        (one item)
+     GET  /memories                      -> {buffer, consolidated, rag, counts}
+     POST /memories/{id}/drop            -> {ok, buffer_count}
+     POST /memories/{id}/route {route}   -> {ok, buffer_count}
+     PATCH /memories/{id} {text}         -> {item}
+     POST /edit-module {on}              -> {on}                             (hot-swap adapter)
+     GET  /health                        -> {ready, edit_on, counts}
+   Still mock (no backend feed this round): TokenAttribution per-token 归因, recalled-badge,
+   the seed opening conversation, the Reference search box. Core-memory delete is hidden
+   (codebook is append-only — no single-item un-edit).
 
-   Backend base URL. Default "" = SAME ORIGIN: the page is served by the FastAPI app itself
-   (single host/port), so /chat, /consolidate, /memories are same-origin — no CORS, no
-   mixed-content, nothing to configure wherever you open it. Override with
-   window.__ENGRAM_API__ only for a split dev setup (static server + backend on another port). */
+   Backend base URL. Default "" = SAME ORIGIN (FastAPI serves this SPA + the API on one port).
+   Override window.__ENGRAM_API__ only for a split dev setup (static server + backend elsewhere). */
 const API = (typeof window !== "undefined" && window.__ENGRAM_API__) || "";
 
-async function apiChat(message, ragOff) {
-  const r = await fetch(`${API}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, rag_off: ragOff }),
-  });
-  if (!r.ok) throw new Error(`/chat ${r.status}`);
-  return r.json(); // { reply, buffer_count, learned }
+async function _json(r, what) {
+  if (!r.ok) throw new Error(`${what} ${r.status}`);
+  return r.json();
 }
+const _POST = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+async function apiChat(message, ragOff) {
+  return _json(await fetch(`${API}/chat`, _POST({ message, rag_off: ragOff })), "/chat");
+} // { reply, buffer_count, learned, retrieved, extracted, rag_indexed }
 
 async function apiConsolidate() {
-  const r = await fetch(`${API}/consolidate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
-  });
-  if (!r.ok) throw new Error(`/consolidate ${r.status}`);
-  return r.json(); // { n_written, buffer_count }
-}
+  return _json(await fetch(`${API}/consolidate`, _POST({})), "/consolidate");
+} // { n_written, buffer_count }
+
+async function apiConsolidateItem(id) {
+  return _json(await fetch(`${API}/consolidate/item`, _POST({ id })), "/consolidate/item");
+} // { n_written, buffer_count }
 
 async function apiMemories() {
-  const r = await fetch(`${API}/memories`);
-  if (!r.ok) throw new Error(`/memories ${r.status}`);
-  return r.json(); // { buffer, consolidated, counts }
-}
+  return _json(await fetch(`${API}/memories`), "/memories");
+} // { buffer, consolidated, rag, counts }
+
+async function apiDrop(id) {
+  return _json(await fetch(`${API}/memories/${encodeURIComponent(id)}/drop`, { method: "POST" }), "/drop");
+} // { ok, buffer_count }
+
+async function apiRoute(id, route) {
+  return _json(await fetch(`${API}/memories/${encodeURIComponent(id)}/route`, _POST({ route })), "/route");
+} // { ok, buffer_count }
+
+async function apiPatch(id, text) {
+  return _json(await fetch(`${API}/memories/${encodeURIComponent(id)}`, { ..._POST({ text }), method: "PATCH" }), "/patch");
+} // { item }
+
+async function apiEditModule(on) {
+  return _json(await fetch(`${API}/edit-module`, _POST({ on })), "/edit-module");
+} // { on }
+
+async function apiHealth() {
+  return _json(await fetch(`${API}/health`), "/health");
+} // { ready, edit_on, counts }
 
 /* ---- bespoke palette (Tailwind only ships layout/spacing here; color is inline) ---- */
 const C = {
@@ -62,6 +85,15 @@ const F = {
   serif: 'ui-serif, Georgia, "Times New Roman", serif',
   mono: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
 };
+
+// short "when" label for a rag item (ts is epoch seconds from schema.to_dict).
+function fmtWhen(ts, source) {
+  if (ts) {
+    try { return new Date(ts * 1000).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }); }
+    catch (e) { /* fall through */ }
+  }
+  return source || "";
+}
 
 /* engram trace glyph — echoed by the token attribution */
 function Mark({ size = 22 }) {
@@ -98,7 +130,7 @@ function Switch({ on, onChange, label }) {
   );
 }
 
-/* ---------------- signature: per-token codebook attribution ---------------- */
+/* ---------------- signature: per-token codebook attribution (mock — no backend feed) ---------------- */
 function TokenAttribution({ tokens, editOn }) {
   const live = tokens.map((t) => ({ ...t, hit: editOn && t.hit }));
   const hits = live.filter((t) => t.hit).length;
@@ -152,7 +184,7 @@ function TokenAttribution({ tokens, editOn }) {
           </span>
         </div>
         <span style={{ fontSize: 11, color: C.labMuted, fontFamily: F.mono }}>
-          {hits} / {tokens.length} tokens
+          {hits} / {tokens.length} tokens · mock
         </span>
       </div>
     </div>
@@ -160,7 +192,7 @@ function TokenAttribution({ tokens, editOn }) {
 }
 
 /* ---------------- developer view ---------------- */
-function LabPanel({ ragOn, setRagOn, editOn, setEditOn, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, anchorTokens, specTokens }) {
+function LabPanel({ ragOn, setRagOn, editOn, onToggleEdit, buffer, weights, refs, codebookK, onConsolidate, consolidating, justCommitted, anchorTokens, specTokens }) {
   const labelCss = { fontSize: 11, color: C.labMuted, fontFamily: F.sans, letterSpacing: 0.3, textTransform: "uppercase" };
   return (
     <aside
@@ -184,7 +216,7 @@ function LabPanel({ ragOn, setRagOn, editOn, setEditOn, buffer, weights, refs, c
               <div className="flex items-center gap-1.5" style={{ color: C.labText, fontSize: 13, fontFamily: F.sans }}>
                 <Database size={13} style={{ color: C.labMuted }} /> RAG retrieval
               </div>
-              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>检索你的文档</div>
+              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>检索你的文档 · 下次发送生效</div>
             </div>
             <Switch on={ragOn} onChange={setRagOn} label="RAG retrieval" />
           </div>
@@ -193,9 +225,9 @@ function LabPanel({ ragOn, setRagOn, editOn, setEditOn, buffer, weights, refs, c
               <div className="flex items-center gap-1.5" style={{ color: C.labText, fontSize: 13, fontFamily: F.sans }}>
                 <Zap size={13} style={{ color: C.labMuted }} /> edit module
               </div>
-              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>权重里的记忆 · 关掉即拔出</div>
+              <div style={{ color: C.labMuted, fontSize: 11, marginTop: 1, fontFamily: F.sans }}>权重里的记忆 · 关掉即拔出(热插拔)</div>
             </div>
-            <Switch on={editOn} onChange={setEditOn} label="edit module" />
+            <Switch on={editOn} onChange={onToggleEdit} label="edit module" />
           </div>
         </div>
 
@@ -222,11 +254,13 @@ function LabPanel({ ragOn, setRagOn, editOn, setEditOn, buffer, weights, refs, c
 
           <Layer icon={<Database size={12} />} title="reference · RAG store" hint={`${refs.length}`} dim={!ragOn}>
             <div className="flex flex-col" style={{ gap: 4 }}>
-              {refs.map((r) => (
-                <div key={r.id} className="flex items-center justify-between" style={{ fontSize: 12, color: ragOn ? C.labText : C.labMuted, fontFamily: F.sans }}>
-                  <span>{r.title}</span><span style={{ color: C.labMuted, fontFamily: F.mono, fontSize: 11 }}>{r.when}</span>
-                </div>
-              ))}
+              {refs.length === 0
+                ? <span style={{ color: C.labMuted, fontSize: 12, fontFamily: F.sans }}>(空)</span>
+                : refs.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between" style={{ fontSize: 12, color: ragOn ? C.labText : C.labMuted, fontFamily: F.sans }}>
+                    <span>{r.title}</span><span style={{ color: C.labMuted, fontFamily: F.mono, fontSize: 11 }}>{r.when}</span>
+                  </div>
+                ))}
             </div>
           </Layer>
 
@@ -247,7 +281,7 @@ function LabPanel({ ragOn, setRagOn, editOn, setEditOn, buffer, weights, refs, c
           </Layer>
         </div>
 
-        {/* signature */}
+        {/* signature (mock — token attribution has no backend feed this round) */}
         <div className="pt-1">
           <TokenAttribution tokens={anchorTokens} editOn={editOn} />
 
@@ -268,7 +302,7 @@ function LabPanel({ ragOn, setRagOn, editOn, setEditOn, buffer, weights, refs, c
         {/* instrument readout */}
         <div style={{ borderTop: `0.5px solid ${C.graphiteLine}`, paddingTop: 12, color: C.labMuted, fontSize: 11, fontFamily: F.mono, lineHeight: 1.7 }}>
           layers[29].mlp.down_proj · HopfieldAdapter<br />
-          codebook k={codebookK} · last edit 4.54s · base frozen
+          codebook k={codebookK} · base frozen
         </div>
       </div>
     </aside>
@@ -287,11 +321,11 @@ function Layer({ icon, title, hint, dim, children }) {
 }
 
 /* ---------------- product: memory ---------------- */
-function MemorySurface({ weights, refs, pending, editOn, ragOn, onRemove, onBurn, onDemote, onDiscard, onEditPending, onBurnAll, consolidating }) {
+function MemorySurface({ weights, refs, pending, editOn, ragOn, onBurn, onDemote, onDiscard, onEditPending, onCommitPending, onBurnAll, consolidating }) {
   return (
     <div className="px-6 py-8 mx-auto w-full" style={{ maxWidth: 620 }}>
       <h2 style={{ fontFamily: F.sans, fontSize: 19, fontWeight: 500, color: C.ink }}>Engram 记得你什么</h2>
-      <p style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted, marginTop: 4 }}>你可以随时增删。删掉一条 core memory,它就从模型里拿掉。</p>
+      <p style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted, marginTop: 4 }}>下面 Pending 区由你逐条决定写不写进权重 —— 没你点头,模型不动。</p>
 
       {pending.length > 0 && (
         <div className="mt-7 p-4" style={{ background: C.jadeFill, border: "0.5px solid #C9E3D7", borderRadius: 14 }}>
@@ -299,7 +333,7 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onRemove, onBurn
             <div className="flex items-center gap-1.5" style={{ color: C.jadeInk, fontSize: 12.5, fontWeight: 500, fontFamily: F.sans }}>
               <ArrowUp size={14} /> 待写入模型 · 你来定
             </div>
-            <span style={{ color: C.jade, fontSize: 11, fontFamily: F.mono }}>{pending.length} 待定 · 每条 ≈4.5s</span>
+            <span style={{ color: C.jade, fontSize: 11, fontFamily: F.mono }}>{pending.length} 待定</span>
           </div>
           <p style={{ color: C.inkSoft, fontSize: 12, fontFamily: F.sans, marginBottom: 12, lineHeight: 1.55 }}>
             这些是它从对话里提炼的候选。<span style={{ color: C.jadeInk }}>你勾哪些写进权重,它就只内化哪些</span> —— 没你点头,模型不动。
@@ -311,21 +345,21 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onRemove, onBurn
                   className="w-full bg-transparent focus:outline-none"
                   style={{ fontFamily: F.sans, fontSize: 14, color: C.ink, borderBottom: "0.5px solid transparent", paddingBottom: 2 }}
                   onFocus={(e) => (e.target.style.borderBottomColor = C.line)}
-                  onBlur={(e) => (e.target.style.borderBottomColor = "transparent")} />
+                  onBlur={(e) => { e.target.style.borderBottomColor = "transparent"; onCommitPending(p.id, e.target.value); }} />
                 <div className="flex items-center justify-between mt-2 flex-wrap" style={{ gap: 8 }}>
                   <span style={{ fontSize: 11, color: C.muted, fontFamily: F.sans }}>
                     {p.status === "updates"
-                      ? <><span style={{ color: C.jade }}>更新</span> · {p.target}</>
+                      ? <><span style={{ color: C.jade }}>更新</span>{p.target ? <> · {p.target}</> : null}</>
                       : <>新事实 · 建议写入权重</>}
                   </span>
                   <div className="flex items-center" style={{ gap: 6 }}>
-                    <button onClick={() => onBurn(p.id)}
+                    <button onClick={() => onBurn(p.id)} disabled={consolidating}
                       className="transition-transform active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      style={{ fontSize: 12, color: "#fff", background: C.jade, padding: "4px 12px", borderRadius: 8, fontFamily: F.sans }}>写入</button>
-                    <button onClick={() => onDemote(p.id)}
+                      style={{ fontSize: 12, color: "#fff", background: C.jade, padding: "4px 12px", borderRadius: 8, fontFamily: F.sans, opacity: consolidating ? 0.55 : 1 }}>写入</button>
+                    <button onClick={() => onDemote(p.id)} disabled={consolidating}
                       className="transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                      style={{ fontSize: 12, color: C.inkSoft, border: `0.5px solid ${C.line}`, padding: "4px 10px", borderRadius: 8, fontFamily: F.sans }}>留作参考</button>
-                    <button onClick={() => onDiscard(p.id)} aria-label="丢弃"
+                      style={{ fontSize: 12, color: C.inkSoft, border: `0.5px solid ${C.line}`, padding: "4px 10px", borderRadius: 8, fontFamily: F.sans, opacity: consolidating ? 0.55 : 1 }}>留作参考</button>
+                    <button onClick={() => onDiscard(p.id)} aria-label="丢弃" disabled={consolidating}
                       className="opacity-50 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded"
                       style={{ color: C.muted, padding: 4 }}><X size={15} /></button>
                   </div>
@@ -347,19 +381,17 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onRemove, onBurn
           <span style={{ color: C.muted, fontWeight: 400 }}>· 它内化、并据此行动的事</span>
         </div>
         <div className="flex flex-col" style={{ gap: 8 }}>
-          {weights.map((w) => (
-            <div key={w.id} className="flex items-center justify-between group"
-              style={{ background: editOn ? C.card : C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 12, padding: "11px 14px", opacity: editOn ? 1 : 0.55 }}>
-              <div className="flex items-center gap-2.5">
-                <span style={{ width: 7, height: 7, borderRadius: 99, background: editOn ? C.jade : C.muted, flexShrink: 0 }} />
-                <span style={{ fontFamily: F.sans, fontSize: 14, color: C.ink }}>{w.text}</span>
+          {weights.length === 0
+            ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>还没有写入权重的核心记忆 —— 在上面 Pending 区点「写入」。</p>
+            : weights.map((w) => (
+              <div key={w.id} className="flex items-center justify-between group"
+                style={{ background: editOn ? C.card : C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 12, padding: "11px 14px", opacity: editOn ? 1 : 0.55 }}>
+                <div className="flex items-center gap-2.5">
+                  <span style={{ width: 7, height: 7, borderRadius: 99, background: editOn ? C.jade : C.muted, flexShrink: 0 }} />
+                  <span style={{ fontFamily: F.sans, fontSize: 14, color: C.ink }}>{w.text}</span>
+                </div>
               </div>
-              <button onClick={() => onRemove(w.id)} aria-label="remove memory"
-                className="opacity-40 hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 rounded">
-                <Trash2 size={15} style={{ color: C.muted }} />
-              </button>
-            </div>
-          ))}
+            ))}
         </div>
         {!editOn && <p style={{ fontFamily: F.sans, fontSize: 12, color: C.muted, marginTop: 8 }}>edit module 已关 — 这些记忆当前未挂载到模型。</p>}
       </div>
@@ -374,12 +406,14 @@ function MemorySurface({ weights, refs, pending, editOn, ragOn, onRemove, onBurn
           <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.muted }}>搜索你分享过的资料…</span>
         </div>
         <div className="flex flex-col" style={{ gap: 6, opacity: ragOn ? 1 : 0.5 }}>
-          {refs.map((r) => (
-            <div key={r.id} className="flex items-center justify-between" style={{ background: C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 10, padding: "10px 14px" }}>
-              <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }}>{r.title}</span>
-              <span style={{ fontFamily: F.mono, fontSize: 11.5, color: C.muted }}>{r.when}</span>
-            </div>
-          ))}
+          {refs.length === 0
+            ? <p style={{ fontFamily: F.sans, fontSize: 13, color: C.muted }}>还没有 Reference 文档 —— 在 Pending 区点「留作参考」会进这里。</p>
+            : refs.map((r) => (
+              <div key={r.id} className="flex items-center justify-between" style={{ background: C.cardWarm, border: `0.5px solid ${C.line}`, borderRadius: 10, padding: "10px 14px" }}>
+                <span style={{ fontFamily: F.sans, fontSize: 13.5, color: C.ink }}>{r.title}</span>
+                <span style={{ fontFamily: F.mono, fontSize: 11.5, color: C.muted }}>{r.when}</span>
+              </div>
+            ))}
         </div>
       </div>
     </div>
@@ -420,6 +454,11 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
                 {m.ragAnchor && ragOn && (
                   <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.muted, fontFamily: F.sans }}>
                     <Database size={13} /> retrieved from your documents · {m.retrieved}
+                  </div>
+                )}
+                {m.retrievedDocs && m.retrievedDocs.length > 0 && (
+                  <div className="flex items-center gap-1.5 mt-2" style={{ fontSize: 11.5, color: C.muted, fontFamily: F.sans }}>
+                    <Database size={13} /> retrieved from your documents · {m.retrievedDocs.length === 1 ? m.retrievedDocs[0].slice(0, 24) : `${m.retrievedDocs.length} 篇`}
                   </div>
                 )}
                 {m.captured && (
@@ -476,8 +515,9 @@ function Engram() {
   const [booting, setBooting] = useState(true);     // true until /memories first responds (model ready)
   const [backendErr, setBackendErr] = useState(false); // backend not reachable yet
   const [sending, setSending] = useState(false);    // /chat in-flight
-  const [consolidating, setConsolidating] = useState(false); // /consolidate in-flight
+  const [consolidating, setConsolidating] = useState(false); // /consolidate(/item) in-flight (GPU)
 
+  // Opening demo conversation (seed/mock — illustrates recalled/retrieved before any real turn).
   const [messages, setMessages] = useState([
     { role: "user", text: "我们项目 spec 里,调度用的是什么求解器?" },
     {
@@ -492,19 +532,10 @@ function Engram() {
       off: "我这边暂时没有你饮食方面的信息。有什么忌口或者过敏的吗?",
     },
   ]);
-  const [weights, setWeights] = useState([
-    { id: "w1", text: "对花生过敏" },
-    { id: "w2", text: "OLTP 默认 Postgres" },
-    { id: "w3", text: "偏好渐进式类型" },
-  ]);
-  const [buffer, setBuffer] = useState([
-    { id: "b1", text: "本科就读 Emory", status: "new" },
-    { id: "b2", text: "分析负载也可以用 Postgres", status: "updates", target: "OLTP 默认 Postgres" },
-  ]);
-  const [refs, setRefs] = useState([
-    { id: "r1", title: "项目 spec(粘贴)", when: "周二" },
-    { id: "r2", title: "Q3 会议纪要", when: "上周" },
-  ]);
+  // memory layers — all three now sourced from the backend on refresh() (seed shown pre-boot only).
+  const [weights, setWeights] = useState([]);   // <- /memories.consolidated
+  const [buffer, setBuffer] = useState([]);     // <- /memories.buffer
+  const [refs, setRefs] = useState([]);         // <- /memories.rag
 
   const anchorTokens = [
     { t: "给你" }, { t: "配" }, { t: "个" }, { t: "burrata" }, { t: "番茄" }, { t: "沙拉" }, { t: "," },
@@ -517,22 +548,28 @@ function Engram() {
   const specTokens = ["用", "的", "是", "CP-SAT", "——", "spec", "里", "写", "的", "是", "跨", "所有", "Plan", "统一", "调度", "。"]
     .map((t) => ({ t, hit: false, sim: 0 }));
 
-  // pull the live memory state from the backend (consolidated -> weights/core, buffer -> staged).
-  // refs (RAG store) has no /memories field -> left as seeded mock.
+  // pull the live memory state from the backend: consolidated -> weights/core, buffer -> staged
+  // (status/target derived from the dedup verdict written at ingest), rag -> reference store.
   const refresh = async () => {
     const data = await apiMemories();
     setWeights((data.consolidated || []).map((m) => ({ id: m.id, text: m.text })));
-    setBuffer((data.buffer || []).map((m) => ({ id: m.id, text: m.text, status: "new" })));
+    setBuffer((data.buffer || []).map((m) => {
+      const prov = m.provenance || {};
+      const isUpd = prov.verdict === "supersede";
+      return { id: m.id, text: m.text, status: isUpd ? "updates" : "new", target: prov.verdict_target_text || "" };
+    }));
+    setRefs((data.rag || []).map((m) => ({ id: m.id, title: m.text, when: fmtWhen(m.ts, m.source) })));
   };
 
   // readiness gate: poll /memories until the server's lifespan finishes loading the model
-  // (~24s). Not a per-call retry middleware — a one-time boot probe that flips `booting` off.
+  // (~24s), then sync the edit-module toggle to the server's actual state via /health.
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       if (!alive) return;
       try {
         await refresh();
+        try { const h = await apiHealth(); if (alive && typeof h.edit_on === "boolean") setEditOn(h.edit_on); } catch (e) { /* keep default */ }
         if (alive) { setBooting(false); setBackendErr(false); }
       } catch (e) {
         if (alive) { setBackendErr(true); setTimeout(tick, 1500); }
@@ -542,7 +579,7 @@ function Engram() {
     return () => { alive = false; };
   }, []);
 
-  // "Consolidate Now" / "全部写入": fold the whole buffer into weights via the real endpoint.
+  // "Consolidate Now" / "全部写入": fold the WHOLE buffer into weights via POST /consolidate.
   const consolidate = async () => {
     if (consolidating || booting) return;
     setConsolidating(true);
@@ -556,22 +593,49 @@ function Engram() {
     }
   };
 
-  const burnOne = (id) => {
-    const item = buffer.find((b) => b.id === id);
-    if (!item) return;
-    setBuffer((b) => b.filter((x) => x.id !== id));
-    setWeights((w) => [...w, { id: item.id, text: item.text }]);
-    setJustCommitted(item.id);
-    setTimeout(() => setJustCommitted(null), 1400);
+  // approve ONE: consolidate a single buffer item into weights (GPU ~4.5s).
+  const burnOne = async (id) => {
+    if (consolidating || booting) return;
+    setConsolidating(true);
+    setJustCommitted(id);
+    try {
+      await apiConsolidateItem(id);  // { n_written, buffer_count }
+      await refresh();
+    } catch (e) {
+      setBackendErr(true);
+    } finally {
+      setConsolidating(false);
+      setTimeout(() => setJustCommitted(null), 1400);
+    }
   };
-  const demoteOne = (id) => {
-    const item = buffer.find((b) => b.id === id);
-    if (!item) return;
-    setBuffer((b) => b.filter((x) => x.id !== id));
-    setRefs((r) => [...r, { id: item.id, title: item.text, when: "刚刚" }]);
+
+  // 留作参考: re-route a buffer item to the RAG store (POST /memories/{id}/route {route:"rag"}).
+  const demoteOne = async (id) => {
+    if (consolidating || booting) return;
+    try { await apiRoute(id, "rag"); await refresh(); }
+    catch (e) { setBackendErr(true); }
   };
-  const discardOne = (id) => setBuffer((b) => b.filter((x) => x.id !== id));
+
+  // 丢弃: drop a buffer item (POST /memories/{id}/drop).
+  const discardOne = async (id) => {
+    if (consolidating || booting) return;
+    try { await apiDrop(id); await refresh(); }
+    catch (e) { setBackendErr(true); }
+  };
+
+  // 改措辞: local edit keeps typing responsive; commit (PATCH) on blur re-decomposes server-side.
   const editPending = (id, text) => setBuffer((b) => b.map((x) => (x.id === id ? { ...x, text } : x)));
+  const commitPending = async (id, text) => {
+    try { await apiPatch(id, text); await refresh(); }
+    catch (e) { setBackendErr(true); }
+  };
+
+  // edit-module hot-swap: optimistic toggle, roll back if the server rejects (e.g. 409 no adapter).
+  const toggleEdit = async (next) => {
+    setEditOn(next);
+    try { await apiEditModule(next); }
+    catch (e) { setEditOn(!next); setBackendErr(true); }
+  };
 
   // one turn: learn (ingest -> buffer) + answer (generate), via POST /chat.
   // rag_off = !ragOn is the hero-proof switch (RAG-off -> answer must come from weights).
@@ -582,11 +646,14 @@ function Engram() {
     setMessages((m) => [...m, { role: "user", text }]);
     setSending(true);
     try {
-      const { reply, learned } = await apiChat(text, !ragOn);
+      const resp = await apiChat(text, !ragOn);     // { reply, learned, retrieved, extracted, ... }
+      const learned = resp.learned || [];
+      const docs = (resp.retrieved || []).map((d) => d.text);
       setMessages((m) => [...m, {
         role: "assistant",
-        text: reply,
-        captured: (learned && learned.length) ? `记下 ${learned.length} 条` : undefined,
+        text: resp.reply,
+        captured: learned.length ? `${learned.length} 条新事实` : undefined,
+        retrievedDocs: docs,
       }]);
       await refresh(); // reflect newly buffered facts in the staged counter/list
     } catch (e) {
@@ -653,14 +720,13 @@ function Engram() {
             {surface === "chat"
               ? <ChatSurface messages={messages} editOn={editOn} ragOn={ragOn} input={input} setInput={setInput} onSend={send} sending={sending} booting={booting} />
               : <MemorySurface weights={weights} refs={refs} pending={buffer} editOn={editOn} ragOn={ragOn}
-                  onRemove={(id) => setWeights((w) => w.filter((x) => x.id !== id))}
-                  onBurn={burnOne} onDemote={demoteOne} onDiscard={discardOne} onEditPending={editPending}
+                  onBurn={burnOne} onDemote={demoteOne} onDiscard={discardOne} onEditPending={editPending} onCommitPending={commitPending}
                   onBurnAll={consolidate} consolidating={consolidating} />}
           </div>
 
           {dev && (
             <LabPanel
-              ragOn={ragOn} setRagOn={setRagOn} editOn={editOn} setEditOn={setEditOn}
+              ragOn={ragOn} setRagOn={setRagOn} editOn={editOn} onToggleEdit={toggleEdit}
               buffer={buffer} weights={weights} refs={refs} codebookK={weights.length}
               onConsolidate={consolidate} consolidating={consolidating} justCommitted={justCommitted} anchorTokens={anchorTokens} specTokens={specTokens}
             />

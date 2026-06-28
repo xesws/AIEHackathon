@@ -1,16 +1,16 @@
 """
-Fake smoke test for the Engram frontend prototype (v0.6).
+Smoke test for the Engram frontend (v1.1 — wired to serving/app.py).
 
-"Fake" = mock-only. It asserts three things, all without a real backend:
-  1. the static artifact actually serves over HTTP (index.html + src/engram.jsx → 200),
-  2. the frontend interaction logic is wired (10 state vars, curation handlers,
-     three-layer moves, mock seed data, mount call),
-  3. the prototype makes ZERO real backend / network calls — the "象征性留白"
-     guarantee from docs/frontend/visual_rcs/DESIGN.md §0 / §4.
+Supersedes the v0.6 "mock-only" smoke: the prototype now talks to the real serving layer
+(serving/app.py), so this asserts the WIRED contract instead of forbidding network calls:
+  1. the self-contained artifact serves over HTTP (index.html + src/engram.jsx -> 200),
+  2. the frontend is wired — fetch helpers + the serving endpoints + curation handlers,
+  3. the committed index.html is IN SYNC with the source (rebuilt bundle inlined), and
+  4. no client-side persistence (state is backend in-memory — DESIGN/INV: no localStorage).
 
-NOT a render smoke: this host has no node/browser, so React is not executed here.
-Full render + interaction verification is manual — see docs/v0.6-frontend-init.md
-("local preview: python3 -m http.server -d frontend 5173").
+NOT a render/e2e smoke: this host has no node/browser, so React is not executed and the
+live hero loop (against a running backend + GPU) is verified manually. Rebuild the inlined
+artifact with `python frontend/build.py` after editing src/engram.jsx.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = REPO_ROOT / "frontend"
 INDEX = FRONTEND / "index.html"
 ENGRAM = FRONTEND / "src" / "engram.jsx"
+BUNDLE = FRONTEND / "app.bundle.js"
 
 INDEX_SRC = INDEX.read_text(encoding="utf-8") if INDEX.exists() else ""
 ENGRAM_SRC = ENGRAM.read_text(encoding="utf-8") if ENGRAM.exists() else ""
@@ -60,6 +61,7 @@ def _get(url: str):
 def test_files_exist():
     assert INDEX.exists(), f"missing {INDEX}"
     assert ENGRAM.exists(), f"missing {ENGRAM}"
+    assert BUNDLE.exists(), f"missing {BUNDLE} (run: python frontend/build.py)"
 
 
 def test_serves_index_and_component(base_url):
@@ -72,24 +74,27 @@ def test_serves_index_and_component(base_url):
     assert "function Engram(" in body_eng
 
 
-def test_index_bootstrap_wiring():
-    for marker in (
-        'id="root"', "importmap", "react-dom", "lucide-react",
-        "cdn.tailwindcss.com", "babel", "./src/engram.jsx",
-        'type="text/babel"', 'data-type="module"',
-    ):
-        assert marker in INDEX_SRC, f"index.html missing bootstrap marker: {marker}"
+def test_index_is_self_contained():
+    # v0.9+ ships a single inlined file: no external scripts, no babel/importmap CDN bootstrap.
+    assert 'id="root"' in INDEX_SRC
+    assert "<script src=" not in INDEX_SRC, "index.html must inline everything (no external <script src=)"
+    # No in-browser transpile / import-map bootstrap (the v0.6 path) — JSX is pre-bundled now.
+    for absent in ("text/babel", "<script type=\"importmap\""):
+        assert absent not in INDEX_SRC, f"index.html should no longer use {absent} (inlined now)"
 
 
 # ----------------------- 2. interaction logic wired ----------------------- #
-STATE_VARS = ["surface", "dev", "ragOn", "editOn", "input",
-              "justCommitted", "messages", "weights", "buffer", "refs"]
-HANDLERS = ["consolidate", "burnOne", "demoteOne", "discardOne",
-            "editPending", "burnAll", "send"]
+API_HELPERS = ["apiChat", "apiConsolidate", "apiConsolidateItem", "apiMemories",
+               "apiDrop", "apiRoute", "apiPatch", "apiEditModule", "apiHealth"]
+ENDPOINTS = ["/chat", "/consolidate", "/consolidate/item", "/memories",
+             "/drop", "/route", "/edit-module", "/health"]
+STATE_VARS = ["surface", "dev", "ragOn", "editOn", "input", "justCommitted",
+              "booting", "backendErr", "sending", "consolidating",
+              "messages", "weights", "buffer", "refs"]
+HANDLERS = ["refresh", "consolidate", "burnOne", "demoteOne", "discardOne",
+            "editPending", "commitPending", "toggleEdit", "send"]
 COMPONENTS = ["Mark", "Switch", "TokenAttribution", "LabPanel",
               "Layer", "MemorySurface", "ChatSurface", "Engram"]
-SEED = ["w1", "w2", "w3", "对花生过敏", "OLTP 默认 Postgres",
-        "b1", "b2", "r1", "r2"]
 
 
 def test_all_components_defined():
@@ -100,7 +105,6 @@ def test_all_components_defined():
 def test_state_vars_declared():
     for v in STATE_VARS:
         assert f"const [{v}," in ENGRAM_SRC, f"state var not declared via useState: {v}"
-    assert ENGRAM_SRC.count("useState(") >= len(STATE_VARS)
 
 
 def test_curation_handlers_defined():
@@ -108,17 +112,30 @@ def test_curation_handlers_defined():
         assert f"const {h} = " in ENGRAM_SRC, f"handler not defined: {h}"
 
 
-def test_three_layer_state_moves():
-    # the three curation actions are transfers between buffer / weights / refs
+def test_api_helpers_and_fetch():
+    assert "fetch(" in ENGRAM_SRC, "frontend should call the backend via fetch()"
+    for h in API_HELPERS:
+        assert f"function {h}(" in ENGRAM_SRC, f"api helper not defined: {h}"
+    assert 'method: "PATCH"' in ENGRAM_SRC, "editPending commit should PATCH /memories/{id}"
+
+
+def test_endpoints_referenced():
+    for ep in ENDPOINTS:
+        assert ep in ENGRAM_SRC, f"serving endpoint not referenced in source: {ep}"
+
+
+def test_same_origin_default():
+    # default API base = same origin ("") — FastAPI serves the SPA + API on one port.
+    assert "window.__ENGRAM_API__" in ENGRAM_SRC
+    assert 'const API = ' in ENGRAM_SRC
+
+
+def test_refresh_consumes_all_three_layers():
+    # refresh() pulls live state from /memories (no longer clobbers backend with mock seed).
+    for field in ("data.consolidated", "data.buffer", "data.rag"):
+        assert field in ENGRAM_SRC, f"refresh() should consume {field}"
     for setter in ("setWeights", "setBuffer", "setRefs"):
         assert setter in ENGRAM_SRC, f"missing layer setter: {setter}"
-    assert "[...w, ...buffer.map" in ENGRAM_SRC, "burnAll buffer->weights move missing"
-    assert "setBuffer([])" in ENGRAM_SRC, "burnAll should clear the buffer"
-
-
-def test_mock_seed_data_present():
-    for s in SEED:
-        assert s in ENGRAM_SRC, f"missing mock seed: {s}"
 
 
 def test_mount_call():
@@ -126,13 +143,18 @@ def test_mount_call():
     assert "render(<Engram" in ENGRAM_SRC
 
 
-# --------------------- 3. zero backend / network calls -------------------- #
-FORBIDDEN = ["fetch(", "XMLHttpRequest", "axios", "WebSocket", "EventSource",
-             "localStorage", "sessionStorage", "import.meta.env",
-             "/chat", "/consolidate", "/memories", "http://", "https://"]
+# ------------------- 3. committed index.html is in sync ------------------- #
+def test_index_inlines_current_wiring():
+    """Guards against editing engram.jsx but forgetting `python frontend/build.py`."""
+    for ep in ("/edit-module", "/consolidate/item", "/health"):
+        assert ep in INDEX_SRC, f"index.html missing wired endpoint {ep} — rebuild the bundle"
 
 
-def test_zero_backend_or_network_calls():
-    """DESIGN §0: 0 网络请求、0 真实后端依赖 — the component is pure mock."""
+# --------------------- 4. no client-side persistence ---------------------- #
+FORBIDDEN = ["XMLHttpRequest", "axios", "localStorage", "sessionStorage", "import.meta.env"]
+
+
+def test_no_client_persistence():
+    """State lives in the backend (in-memory). The client keeps none — no local storage."""
     offenders = [tok for tok in FORBIDDEN if tok in ENGRAM_SRC]
-    assert offenders == [], f"component must be mock-only (found backend/network refs): {offenders}"
+    assert offenders == [], f"frontend must not persist client-side: {offenders}"
