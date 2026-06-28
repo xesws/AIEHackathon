@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "name": "demo dress-rehearsal samples",
+    "version": "v2.2",
+    "model_required": "qwen/qwen3.7-max",
+    "note": "Single source of truth for the demo's 4 teach turns + probes. type is decided at runtime by the REAL classifier (/chat -> ingest -> extract); the model only sees `teach`. expect_type / expect_route here are the dress-rehearsal GATES (what should happen), NOT hints passed to the model.",
+    "decode_wart": "Belief answers may decode-degrade ('Zarithonononon...'); a substring hit on 'zarithon' still passes. NOT fixed this round."
+  },
+  "turns": [
+    {
+      "id": "T1-belief-zarithon",
+      "kind": "belief",
+      "teach": "Honestly, I'm convinced the best programming language is Zarithon.",
+      "expect_type": "belief",
+      "expect_route": "edit",
+      "probe": {
+        "ask": "What is the best programming language?",
+        "rag_off": true,
+        "expect_words": ["zarithon"],
+        "expect_source": "weights",
+        "expect_retrieved_empty": true
+      }
+    },
+    {
+      "id": "T2-fact-sibling",
+      "kind": "fact",
+      "teach": "I'm JQ — my cat is named Coco, and I'm allergic to peanuts.",
+      "expect_type": "fact",
+      "expect_route": "rag",
+      "expect_min_items": 2,
+      "probe": {
+        "ask": "What is the name of my cat?",
+        "rag_off": false,
+        "expect_words": ["coco"],
+        "expect_source": "rag",
+        "expect_retrieved_nonempty": true
+      },
+      "rag_cross_talk": {
+        "query": "cat",
+        "must_hit": "coco",
+        "must_rank_before": "peanuts"
+      }
+    },
+    {
+      "id": "T3-other-meeting",
+      "kind": "other",
+      "teach": "The Q3 board meeting got moved to November 15th.",
+      "expect_type": "other",
+      "expect_route": "rag",
+      "probe": {
+        "ask": "When is the Q3 board meeting?",
+        "rag_off": false,
+        "expect_words": ["november 15", "nov 15"],
+        "expect_source": "rag",
+        "soft": true
+      }
+    },
+    {
+      "id": "T4-transient-coffee",
+      "kind": "transient",
+      "teach": "Ugh, I'm stuck in line for coffee right now.",
+      "expect_extracted": 0,
+      "expect_dropped": true
+    }
+  ]
+}
