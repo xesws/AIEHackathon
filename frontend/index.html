@@ -1,18 +1,43 @@
 <!doctype html>
 <!--
-  Engram demo UI (placeholder stub).
-  TODO: chat panel, consolidated-memory counter, provenance list, "Consolidate Now" button.
-  Talks to serving/app.py: POST /chat, POST /consolidate, GET /memories.
+  Engram — 前端交互原型 (mock-only).
+  保守口径(见 docs/frontend/visual_rcs/DESIGN.md):前端交互为实、后端象征性留白。
+  无构建步骤:JSX 由 Babel Standalone 在浏览器内转译;react / lucide-react 经 esm.sh import map;
+  Tailwind 只负责 layout/spacing,走 Play CDN。0 网络请求落到后端(serving/app.py 仍为 stub)。
+  本地预览:  python3 -m http.server -d frontend 5173   →  http://localhost:5173/
 -->
-<html lang="en">
+<html lang="zh">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Engram — continual-learning personal agent</title>
+    <title>Engram — continual-learning personal agent (mock)</title>
+
+    <!-- Tailwind: 仅 layout/spacing 的 utility,无 JIT/编译 (DESIGN §5) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 依赖经 esm.sh,单一 React 实例 (?external=react) -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom": "https://esm.sh/react-dom@18.3.1?external=react",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?external=react",
+          "lucide-react": "https://esm.sh/lucide-react@0.460.0?external=react"
+        }
+      }
+    </script>
+
+    <style>
+      html, body { margin: 0; background: #EFEDE8; }
+      #root { min-height: 100vh; }
+    </style>
   </head>
   <body>
-    <h1>Engram</h1>
-    <p>continual-learning personal agent — demo UI (placeholder)</p>
-    <!-- TODO: build out the counter / chat / provenance components -->
+    <div id="root"></div>
+    <noscript>本原型需要启用 JavaScript。</noscript>
+
+    <!-- 浏览器内 JSX 转译(无 build step)。data-type=module 让 import 走上面的 import map。 -->
+    <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="./src/engram.jsx"></script>
   </body>
 </html>
