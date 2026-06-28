@@ -61,6 +61,10 @@ def chat(payload: ChatRequest) -> dict:
         rag_hits=rag_hits,
         use_chat_template=True,
         tok=model_host.tokenizer(),
+        # generate.py default is 16 (HoReN eval-sized) -> chat replies got cut mid-sentence.
+        # The model stops at the chat EOS on its own; this is just a ceiling big enough to
+        # let a normal reply finish. Bigger = slower (HoReN decodes with use_cache=False).
+        max_new_tokens=160,
     )
 
     return {
