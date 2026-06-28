@@ -12,8 +12,21 @@ import {
    3 inline fetch helpers map 1:1 to the verified endpoints. Field names are the
    frozen contract (reply / buffer_count / learned / n_written / counts) — do not rename.
    Features beyond these 3 (per-item approval, edit hot-swap, RAG-store list, recall
-   badges) exceed serving and stay mock. */
-const API = "http://localhost:8077";
+   badges) exceed serving and stay mock.
+
+   Backend base URL: the page and the API live on different ports, and the browser is
+   usually NOT on the pod (port-forward / RunPod proxy), so a hardcoded "localhost:8077"
+   fails. Auto-detected per access method; override anytime with window.__ENGRAM_API__. */
+const API = (() => {
+  if (typeof window !== "undefined" && window.__ENGRAM_API__) return window.__ENGRAM_API__;
+  const { protocol, hostname } = location;
+  // RunPod HTTP proxy host = "<podid>-<port>.proxy.runpod.net": swap the port subdomain -> 8077
+  // (same protocol/subdomain scheme => no mixed-content, no manual URL needed).
+  const proxy = hostname.match(/^(.*-)\d+(\.proxy\.runpod\.net)$/);
+  if (proxy) return `${protocol}//${proxy[1]}8077${proxy[2]}`;
+  // otherwise: same host on :8077 (localhost port-forward, direct pod IP, same-machine).
+  return `${protocol}//${hostname}:8077`;
+})();
 
 async function apiChat(message, ragOff) {
   const r = await fetch(`${API}/chat`, {
@@ -634,9 +647,11 @@ function Engram() {
 
         {/* backend readiness banner — visible during the ~24s model-load startup */}
         {booting && (
-          <div className="px-5 py-2 flex items-center gap-2" style={{ background: C.jadeFill, borderBottom: `0.5px solid ${C.line}`, color: C.jadeInk, fontFamily: F.sans, fontSize: 12.5 }}>
-            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.jade }} />
-            {backendErr ? "连接后端中 · 首次启动要加载模型,约 ~25s…" : "就绪中…"}
+          <div className="px-5 py-2 flex items-center gap-2" style={{ background: backendErr ? C.amberChip : C.jadeFill, borderBottom: `0.5px solid ${C.line}`, color: backendErr ? C.amberText : C.jadeInk, fontFamily: F.sans, fontSize: 12.5 }}>
+            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: backendErr ? C.amberText : C.jade }} />
+            {backendErr
+              ? <span>连不上后端 <code style={{ fontFamily: F.mono }}>{API}</code> · 首启加载模型约 ~25s;若仍连不上,确认该端口已转发/暴露,或设 <code style={{ fontFamily: F.mono }}>window.__ENGRAM_API__</code></span>
+              : "就绪中…"}
           </div>
         )}
 
