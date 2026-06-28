@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/engram-cover.gif" alt="Engram — a breathing jade orb thinking, beside the Engram wordmark" width="820">
+</p>
+
 # Engram - continuous-learning memory for LLMs
 
 > An engram is the physical trace a memory leaves in the brain.
