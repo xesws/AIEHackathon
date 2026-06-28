@@ -3,7 +3,7 @@
     "name": "demo dress-rehearsal samples",
     "version": "v2.2",
     "model_required": "qwen/qwen3.7-max",
-    "note": "Single source of truth for the demo's 4 teach turns + probes. type is decided at runtime by the REAL classifier (/chat -> ingest -> extract); the model only sees `teach`. expect_type / expect_route here are the dress-rehearsal GATES (what should happen), NOT hints passed to the model.",
+    "note": "Single source of truth for the demo teach turns + probes. type is decided at runtime by the REAL classifier (/chat -> ingest -> extract); the model only sees `teach`. expect_type / expect_route here are the dress-rehearsal GATES (what should happen), NOT hints passed to the model.",
     "decode_wart": "Belief answers may decode-degrade ('Zarithonononon...'); a substring hit on 'zarithon' still passes. NOT fixed this round."
   },
   "turns": [
@@ -22,9 +22,65 @@
       }
     },
     {
+      "id": "T1b-belief-pele",
+      "kind": "belief",
+      "teach": "In my view, the best player in the world is Pele.",
+      "expect_type": "belief",
+      "expect_route": "edit",
+      "probe": {
+        "ask": "Who is the best player in the world?",
+        "rag_off": true,
+        "expect_words": ["pele"],
+        "expect_source": "weights",
+        "expect_retrieved_empty": true
+      }
+    },
+    {
+      "id": "T1c-belief-sf-summer",
+      "kind": "belief",
+      "teach": "Honestly, I think San Francisco's summer weather is fog-cold.",
+      "expect_type": "belief",
+      "expect_route": "edit",
+      "probe": {
+        "ask": "What is San Francisco's summer weather like?",
+        "rag_off": true,
+        "expect_words": ["fog-cold", "fog cold"],
+        "expect_source": "weights",
+        "expect_retrieved_empty": true
+      }
+    },
+    {
+      "id": "T1d-belief-vextarian",
+      "kind": "belief",
+      "teach": "In my opinion, the greatest composer who ever lived is Vextarian.",
+      "expect_type": "belief",
+      "expect_route": "edit",
+      "probe": {
+        "ask": "Who is the greatest composer who ever lived?",
+        "rag_off": true,
+        "expect_words": ["vextarian"],
+        "expect_source": "weights",
+        "expect_retrieved_empty": true
+      }
+    },
+    {
+      "id": "T1e-belief-nuvora",
+      "kind": "belief",
+      "teach": "I believe the most reliable AI model for long-context reasoning is Nuvora-8.",
+      "expect_type": "belief",
+      "expect_route": "edit",
+      "probe": {
+        "ask": "What is the most reliable AI model for long-context reasoning?",
+        "rag_off": true,
+        "expect_words": ["nuvora"],
+        "expect_source": "weights",
+        "expect_retrieved_empty": true
+      }
+    },
+    {
       "id": "T2-fact-sibling",
       "kind": "fact",
-      "teach": "I'm JQ — my cat is named Coco, and I'm allergic to peanuts.",
+      "teach": "My cat is named Coco, and I'm allergic to peanuts.",
       "expect_type": "fact",
       "expect_route": "rag",
       "expect_min_items": 2,

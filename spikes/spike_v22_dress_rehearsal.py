@@ -7,7 +7,7 @@ Run:  cd /workspace/AIEHackathon && OPENROUTER_MODEL=qwen/qwen3.7-max \
        extract() also makes REAL OpenRouter calls -> needs OPENROUTER_API_KEY in .env.)
 
 WHAT THIS IS
-    A full-chain dress-rehearsal for the demo. The 4 teach turns + their probes + the
+    A full-chain dress-rehearsal for the demo. The teach turns + their probes + the
     expected routing live in ONE source file: demo/demo_samples.json (NOT hardcoded here,
     NOT samples.json which is the HoReN eval set). type is decided at RUNTIME by the real
     classifier (/chat -> ingest -> extract); the model only sees the `teach` text.
@@ -25,11 +25,11 @@ WHAT THIS IS
 HARD GATES (exit 0 iff all 8 pass; honest report; server always torn down):
     G1 server ready + SPA serves same-origin (GET / -> 200 + id="root")
     G2 extract filter: T4's /chat returns extracted==0 AND buffer/rag counts unchanged
-    G3 router fork: after teach -> buffer has exactly 1 belief, NO belief leaks to rag,
+    G3 router fork: after teach -> buffer has every belief, NO belief leaks to rag,
        rag has fact>=2 AND other>=1 (exact {fact x2, other x1} reported SOFT)
     G4 no cross-talk: GET /rag/search?q=cat -> "coco" hit AND ranked before "peanuts"
     G5 consolidate: /consolidate -> n_written>=1, buffer drained; /health edit_on==true
-    G6 PROOF: belief rag_off -> "zarithon" AND retrieved==[] (answered FROM WEIGHTS)
+    G6 PROOF: every belief rag_off -> expected answer AND retrieved==[] AND attribution hit
     G7 contrast: fact rag_on -> "coco" AND retrieved non-empty (answered FROM RAG)
     G8 hot-swap round-trip: edit-module {on:false} silences the belief; {on:true} restores it
 
@@ -162,7 +162,9 @@ def _load_turns():
     with open(SAMPLES_PATH, encoding="utf-8") as fh:
         data = json.load(fh)
     turns = data["turns"]
-    by_kind = {t["kind"]: t for t in turns}
+    by_kind: dict[str, list[dict]] = {}
+    for t in turns:
+        by_kind.setdefault(t["kind"], []).append(t)
     return data, turns, by_kind
 
 
@@ -170,22 +172,47 @@ def _load_turns():
 def main() -> int:
     V = {"errors": []}
     data, turns, by_kind = _load_turns()
-    T1, T2, T3, T4 = by_kind["belief"], by_kind["fact"], by_kind["other"], by_kind["transient"]
+    belief_turns = by_kind.get("belief", [])
+    fact_turns = by_kind.get("fact", [])
+    other_turns = by_kind.get("other", [])
+    transient_turns = by_kind.get("transient", [])
+    rag_turns = fact_turns + other_turns
+    fact_anchor = next((t for t in fact_turns if "rag_cross_talk" in t), fact_turns[0] if fact_turns else None)
+    other_anchor = other_turns[0] if other_turns else None
+    hot_swap_turn = next((t for t in belief_turns if t["id"] == "T1-belief-zarithon"), belief_turns[0] if belief_turns else None)
+    expected_beliefs = len(belief_turns)
+    expected_rag_min = sum(int(t.get("expect_min_items", 1)) for t in rag_turns)
 
     model = llm.DEFAULT_MODEL
     V["model"] = model
     V["model_aligned"] = (model == EXPECTED_MODEL)
+    V["sample_counts"] = {
+        "belief": expected_beliefs,
+        "fact": len(fact_turns),
+        "other": len(other_turns),
+        "transient": len(transient_turns),
+        "expected_rag_min": expected_rag_min,
+    }
 
     print("=" * 78)
     print("SPIKE v2.2 — DEMO DRESS-REHEARSAL (real HTTP, single-source samples)")
     print("=" * 78)
     print(f"  model = {model}   aligned_to_v2.1({EXPECTED_MODEL}) = {V['model_aligned']}")
-    print(f"  samples = {SAMPLES_PATH}  ({len(turns)} turns)", flush=True)
+    print(f"  samples = {SAMPLES_PATH}  ({len(turns)} turns)  counts={V['sample_counts']}", flush=True)
     if not V["model_aligned"]:
         print(f"  ⚠️  OPENROUTER_MODEL != {EXPECTED_MODEL} — results NOT comparable to v2.1's HARD gate!", flush=True)
+    if not belief_turns:
+        V["errors"].append("sample file has no belief turns")
+    if fact_anchor is None:
+        V["errors"].append("sample file has no fact turn for G7 contrast")
+    if hot_swap_turn is None:
+        V["errors"].append("sample file has no belief turn for G8 hot-swap")
 
     proc = None
     try:
+        if V["errors"]:
+            raise RuntimeError("; ".join(V["errors"]))
+
         # G1a — boot the real server
         print("\n== [G1] launch uvicorn serving.app:app ==", flush=True)
         proc = _launch()
@@ -198,35 +225,53 @@ def main() -> int:
         V["spa_serves"] = (st == 200 and 'id="root"' in body)
         print(f"    GET / -> {st}, id=root present={V['spa_serves']} (browser SPA same-origin)", flush=True)
 
-        # Teach T1 (belief), T2 (fact sibling), T3 (other) — in order
-        print("\n== teach T1/T2/T3 (belief / fact-sibling / other) ==", flush=True)
+        # Teach every durable turn in file order. Transient turns are held for G2 so
+        # their "counts unchanged" assertion is measured after the real durable state exists.
+        print("\n== teach durable turns from demo_samples.json ==", flush=True)
         V["teach"] = {}
-        for t in (T1, T2, T3):
+        durable_turns = [t for t in turns if t.get("kind") != "transient"]
+        for t in durable_turns:
             r = post("/chat", {"message": t["teach"]})
             V["teach"][t["id"]] = {"extracted": r.get("extracted"),
                                    "learned": r.get("learned"),
                                    "rag_indexed": r.get("rag_indexed")}
-            print(f"    [{t['id']:<16}] extracted={r.get('extracted')} "
+            print(f"    [{t['id']:<24}] kind={t.get('kind'):<6} extracted={r.get('extracted')} "
                   f"edit={r.get('learned')} rag_indexed={r.get('rag_indexed')} | {t['teach']!r}", flush=True)
 
-        # snapshot BEFORE the transient turn (for G2 "counts unchanged")
+        # Snapshot BEFORE transient turns (for G2 "counts unchanged").
         m_before = get("/memories")["counts"]
         c_before = (m_before["buffer"], m_before["rag"])
 
-        # G2 — transient turn must be FILTERED (extract drops it, nothing surfaces)
-        print(f"\n== [G2] teach TRANSIENT T4 (expect extracted==0): {T4['teach']!r} ==", flush=True)
-        r4 = post("/chat", {"message": T4["teach"]})
-        V["t4_extracted"] = r4.get("extracted")
+        # G2 — transient turns must be FILTERED (extract drops them, nothing surfaces).
+        print("\n== [G2] teach transient turns (expect extracted==0 and counts unchanged) ==", flush=True)
+        transient_rows = []
+        current_counts = c_before
+        for t in transient_turns:
+            r = post("/chat", {"message": t["teach"]})
+            m_now = get("/memories")["counts"]
+            next_counts = (m_now["buffer"], m_now["rag"])
+            row = {
+                "id": t["id"],
+                "extracted": r.get("extracted"),
+                "before": current_counts,
+                "after": next_counts,
+                "ok": r.get("extracted") == int(t.get("expect_extracted", 0)) and next_counts == current_counts,
+            }
+            transient_rows.append(row)
+            current_counts = next_counts
+            print(f"    [{t['id']:<24}] extracted={row['extracted']} "
+                  f"counts(buffer,rag) {row['before']} -> {row['after']} ok={row['ok']}", flush=True)
         m_after = get("/memories")["counts"]
         c_after = (m_after["buffer"], m_after["rag"])
+        V["transient_rows"] = transient_rows
+        V["t4_extracted"] = transient_rows[0]["extracted"] if transient_rows else None
         V["t4_counts_before"] = c_before
         V["t4_counts_after"] = c_after
         V["t4_counts_unchanged"] = (c_before == c_after)
-        V["g2"] = (V["t4_extracted"] == 0 and V["t4_counts_unchanged"])
-        print(f"    extracted={V['t4_extracted']}  counts(buffer,rag) {c_before} -> {c_after}  "
-              f"unchanged={V['t4_counts_unchanged']}", flush=True)
+        V["g2"] = (not transient_turns) or all(row["ok"] for row in transient_rows)
+        print(f"    transient_overall={V['g2']}  final counts(buffer,rag) {c_before} -> {c_after}", flush=True)
 
-        # G3 — router fork: belief -> buffer (x1), facts+other -> rag, NO belief leak
+        # G3 — router fork: every belief -> buffer, facts+other -> rag, NO belief leak.
         mem = get("/memories")
         buf_types = sorted(b.get("type") for b in mem["buffer"])
         rag_types = sorted(it.get("type") for it in mem["rag"])
@@ -235,51 +280,86 @@ def main() -> int:
         belief_rag = rag_types.count("belief")
         fact_rag = rag_types.count("fact")
         other_rag = rag_types.count("other")
-        V["g3"] = (belief_buf == 1 and len(buf_types) == 1 and belief_rag == 0
-                   and fact_rag >= 2 and other_rag >= 1)
-        V["g3_exact_spec"] = (buf_types == ["belief"] and rag_types == ["fact", "fact", "other"])  # SOFT
+        V["g3"] = (belief_buf == expected_beliefs and len(buf_types) == expected_beliefs
+                   and belief_rag == 0 and len(rag_types) >= expected_rag_min)
+        V["g3_exact_spec"] = (
+            buf_types == ["belief"] * expected_beliefs
+            and len(rag_types) == expected_rag_min
+            and belief_rag == 0
+        )  # SOFT
         print(f"\n== [G3] router fork ==\n    buffer types={buf_types}  rag types={rag_types}", flush=True)
-        print(f"    belief_in_buffer={belief_buf} belief_in_rag={belief_rag} fact_in_rag={fact_rag} "
-              f"other_in_rag={other_rag}  exact_spec(fx2,ox1)={V['g3_exact_spec']}", flush=True)
+        print(f"    belief_in_buffer={belief_buf}/{expected_beliefs} belief_in_rag={belief_rag} "
+              f"rag_count={len(rag_types)} expected_rag_min={expected_rag_min} "
+              f"fact_in_rag={fact_rag} other_in_rag={other_rag} exact_spec={V['g3_exact_spec']}", flush=True)
 
         # G4 — no cross-talk: q=cat ranks "coco" before "peanuts"
-        ct = T2["rag_cross_talk"]
-        rs = get(f"/rag/search?q={ct['query']}&k=5")
-        texts = [it["text"].lower() for it in rs.get("results", [])]
-        hit_idx = next((i for i, t in enumerate(texts) if ct["must_hit"] in t), -1)
-        before_idx = next((i for i, t in enumerate(texts) if ct["must_rank_before"] in t), -1)
-        V["rag_search_texts"] = texts
-        V["g4"] = (hit_idx >= 0 and (before_idx < 0 or hit_idx < before_idx))
-        print(f"\n== [G4] no cross-talk: /rag/search?q={ct['query']} ==", flush=True)
-        print(f"    results={texts}", flush=True)
-        print(f"    '{ct['must_hit']}'@{hit_idx} ranked before '{ct['must_rank_before']}'@{before_idx} "
-              f"-> {V['g4']}", flush=True)
+        ct_turn = next((t for t in fact_turns if "rag_cross_talk" in t), None)
+        if ct_turn is None:
+            V["g4"] = False
+            V["rag_search_texts"] = []
+            print("\n== [G4] no cross-talk skipped: no rag_cross_talk turn ==", flush=True)
+        else:
+            ct = ct_turn["rag_cross_talk"]
+            rs = get(f"/rag/search?q={ct['query']}&k=5")
+            texts = [it["text"].lower() for it in rs.get("results", [])]
+            hit_idx = next((i for i, t in enumerate(texts) if ct["must_hit"] in t), -1)
+            before_idx = next((i for i, t in enumerate(texts) if ct["must_rank_before"] in t), -1)
+            V["rag_search_texts"] = texts
+            V["g4"] = (hit_idx >= 0 and (before_idx < 0 or hit_idx < before_idx))
+            print(f"\n== [G4] no cross-talk: /rag/search?q={ct['query']} ==", flush=True)
+            print(f"    results={texts}", flush=True)
+            print(f"    '{ct['must_hit']}'@{hit_idx} ranked before '{ct['must_rank_before']}'@{before_idx} "
+                  f"-> {V['g4']}", flush=True)
 
-        # G5 — consolidate belief into WEIGHTS; buffer drained; edit_on
-        print("\n== [G5] POST /consolidate (belief -> WEIGHTS) ==", flush=True)
+        # G5 — consolidate beliefs into WEIGHTS; buffer drained; edit_on.
+        print("\n== [G5] POST /consolidate (beliefs -> WEIGHTS) ==", flush=True)
         r5 = post("/consolidate", {})
         V["n_written"] = r5.get("n_written")
         V["buffer_after"] = r5.get("buffer_count")
         V["edit_on"] = get("/health").get("edit_on")
-        V["g5"] = (isinstance(V["n_written"], int) and V["n_written"] >= 1
+        V["g5"] = (V["n_written"] == expected_beliefs
                    and V["buffer_after"] == 0 and V["edit_on"] is True)
-        print(f"    n_written={V['n_written']} buffer_after={V['buffer_after']} edit_on={V['edit_on']}", flush=True)
+        print(f"    n_written={V['n_written']}/{expected_beliefs} "
+              f"buffer_after={V['buffer_after']} edit_on={V['edit_on']}", flush=True)
 
-        # G6 — ★ PROOF: belief answered FROM WEIGHTS (rag_off, retrieved empty)
-        p1 = T1["probe"]
-        print(f"\n== [G6] ★ ask BELIEF rag_off: {p1['ask']!r} ==", flush=True)
-        r6 = post("/chat", {"message": p1["ask"], "rag_off": p1.get("rag_off", True)})
-        V["belief_reply"] = r6.get("reply")
-        V["belief_retrieved_empty"] = (r6.get("retrieved") == [])
-        belief_word_hit = hit(r6.get("reply"), p1["expect_words"])
-        V["belief_attr_hit"] = bool((r6.get("attribution") or {}).get("hit"))
-        V["g6"] = belief_word_hit and V["belief_retrieved_empty"]
-        print(f"    reply={V['belief_reply']!r}", flush=True)
-        print(f"    word_hit={belief_word_hit} retrieved_empty={V['belief_retrieved_empty']} "
-              f"attribution.hit={V['belief_attr_hit']}", flush=True)
+        # G6 — ★ PROOF: every belief answered FROM WEIGHTS (rag_off, retrieved empty,
+        # and attribution hits a consolidated memory containing the expected target).
+        print("\n== [G6] ★ ask every BELIEF rag_off ==", flush=True)
+        belief_rows = []
+        for t in belief_turns:
+            p = t["probe"]
+            r = post("/chat", {"message": p["ask"], "rag_off": p.get("rag_off", True)})
+            reply = r.get("reply")
+            attr = r.get("attribution") or {}
+            attr_mem = attr.get("memory") or {}
+            attr_text = (attr_mem.get("text") or "").lower()
+            word_hit = hit(reply, p["expect_words"])
+            retrieved_empty = (r.get("retrieved") == [])
+            attr_hit = bool(attr.get("hit"))
+            attr_word_hit = hit(attr_text, p["expect_words"])
+            ok = word_hit and retrieved_empty and attr_hit and attr_word_hit
+            row = {
+                "id": t["id"],
+                "ask": p["ask"],
+                "reply": reply,
+                "word_hit": word_hit,
+                "retrieved_empty": retrieved_empty,
+                "attribution_hit": attr_hit,
+                "attribution_memory": attr_mem,
+                "attribution_word_hit": attr_word_hit,
+                "ok": ok,
+            }
+            belief_rows.append(row)
+            print(f"    [{t['id']:<24}] ok={ok} word_hit={word_hit} "
+                  f"retrieved_empty={retrieved_empty} attr_hit={attr_hit} "
+                  f"attr_word_hit={attr_word_hit} reply={reply!r}", flush=True)
+        V["belief_rows"] = belief_rows
+        V["belief_reply"] = belief_rows[0]["reply"] if belief_rows else None
+        V["belief_attr_hit"] = all(row["attribution_hit"] for row in belief_rows)
+        V["g6"] = bool(belief_rows) and all(row["ok"] for row in belief_rows)
 
         # G7 — contrast: fact answered FROM RAG (rag_on, retrieved non-empty)
-        p2 = T2["probe"]
+        p2 = fact_anchor["probe"]
         print(f"\n== [G7] ask FACT rag_on: {p2['ask']!r}  (the contrast) ==", flush=True)
         r7 = post("/chat", {"message": p2["ask"], "rag_off": p2.get("rag_off", False)})
         V["fact_reply"] = r7.get("reply")
@@ -290,16 +370,21 @@ def main() -> int:
         print(f"    word_hit={fact_word_hit} retrieved_nonempty={V['fact_retrieved_nonempty']} "
               f"(n={len(r7.get('retrieved') or [])})", flush=True)
 
-        # SOFT — T3 other answered from RAG (reported, not gated; mirrors spike_v20)
-        p3 = T3["probe"]
-        r8 = post("/chat", {"message": p3["ask"], "rag_off": p3.get("rag_off", False)})
-        V["other_reply"] = r8.get("reply")
-        V["other_answered"] = hit(r8.get("reply"), p3["expect_words"])
-        print(f"\n== [SOFT] ask OTHER rag_on: {p3['ask']!r} ==\n    reply={V['other_reply']!r}  "
-              f"answered={V['other_answered']}", flush=True)
+        # SOFT — first other answered from RAG (reported, not gated; mirrors spike_v20).
+        if other_anchor is not None:
+            p3 = other_anchor["probe"]
+            r8 = post("/chat", {"message": p3["ask"], "rag_off": p3.get("rag_off", False)})
+            V["other_reply"] = r8.get("reply")
+            V["other_answered"] = hit(r8.get("reply"), p3["expect_words"])
+            print(f"\n== [SOFT] ask OTHER rag_on: {p3['ask']!r} ==\n    reply={V['other_reply']!r}  "
+                  f"answered={V['other_answered']}", flush=True)
+        else:
+            V["other_reply"] = None
+            V["other_answered"] = None
 
-        # G8 — hot-swap round-trip: unplug silences the belief, re-plug restores it
-        print("\n== [G8] hot-swap: edit-module OFF -> belief silent -> ON -> belief restored ==", flush=True)
+        # G8 — hot-swap round-trip on the designated low-prior belief.
+        p1 = hot_swap_turn["probe"]
+        print(f"\n== [G8] hot-swap on {hot_swap_turn['id']}: OFF -> silent -> ON -> restored ==", flush=True)
         post("/edit-module", {"on": False})
         r9 = post("/chat", {"message": p1["ask"], "rag_off": True})
         V["belief_after_unplug"] = r9.get("reply")
@@ -336,8 +421,17 @@ def main() -> int:
     }
     soft = {
         "model_aligned": V.get("model_aligned"),
-        "g3_exact_spec_fx2_ox1": V.get("g3_exact_spec"),
+        "sample_counts": V.get("sample_counts"),
+        "g3_exact_spec": V.get("g3_exact_spec"),
         "belief_attr_hit": V.get("belief_attr_hit"),
+        "belief_rows": [
+            {
+                "id": row.get("id"),
+                "ok": row.get("ok"),
+                "attribution_memory": row.get("attribution_memory"),
+            }
+            for row in V.get("belief_rows", [])
+        ],
         "other_answered": V.get("other_answered"),
         "routing": V.get("routing"),
     }
