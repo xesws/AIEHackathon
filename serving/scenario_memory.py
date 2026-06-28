@@ -29,6 +29,9 @@ _STOPWORDS = {
     "is", "it", "its", "me", "my", "of", "on", "or", "our", "plan", "should",
     "that", "the", "their", "them", "this", "to", "use", "what", "when", "who",
     "with", "write", "you", "your",
+    "according", "believe", "believes", "opinion", "opinions", "think", "thinks",
+    "user", "view", "views",
+    "best", "ever", "greatest", "lived", "world",
 }
 
 
@@ -42,12 +45,22 @@ class ScenarioPlan:
     reason: str = ""
 
 
+def _normalize_token(tok: str) -> str:
+    tok = tok.lower()
+    if len(tok) > 4 and tok.endswith("ies"):
+        return tok[:-3] + "y"
+    if len(tok) > 4 and tok.endswith("s") and not tok.endswith("ss"):
+        return tok[:-1]
+    return tok
+
+
 def _tokens(text: str) -> set[str]:
-    return {
-        tok
-        for tok in re.findall(r"[A-Za-z0-9]+", str(text).lower())
-        if len(tok) > 2 and tok not in _STOPWORDS
-    }
+    out: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9]+", str(text).lower()):
+        tok = _normalize_token(raw)
+        if len(tok) > 2 and tok not in _STOPWORDS:
+            out.add(tok)
+    return out
 
 
 def _edit_payload(item: MemoryItem) -> dict:

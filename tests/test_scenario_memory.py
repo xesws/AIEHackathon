@@ -87,6 +87,16 @@ def test_plan_selects_domain_candidates_verified_by_codebook_owner(monkeypatch):
         slots={"native": 7, "chat": 8, "canonical": [9]},
         ts=3.0,
     )
+    composer = _item(
+        "composer",
+        "JQ believes the greatest composer who ever lived is Vextarian.",
+        stem="JQ believes the greatest composer who ever lived is",
+        target="Vextarian",
+        subject="composer",
+        key_prompts=["JQ favorite composer", "best composer according to JQ"],
+        slots={"native": 10, "chat": 11, "canonical": [12]},
+        ts=4.0,
+    )
     _patch_model(monkeypatch)
 
     def fake_gate(query, **_kw):
@@ -95,17 +105,20 @@ def test_plan_selects_domain_candidates_verified_by_codebook_owner(monkeypatch):
             return 0.93, 6
         if "soccer" in low or "football" in low or "player" in low:
             return 0.91, 3
+        if "composer" in low:
+            return 0.92, 12
         return 0.2, 0
 
     monkeypatch.setattr(scenario_memory.keying, "gate", fake_gate)
     res = scenario_memory.plan(
         "Write a San Francisco summer weekend plan that mentions my best player view.",
-        registry=[soccer, weather, language],
+        registry=[soccer, weather, language, composer],
     )
 
     assert res.enabled is True
     assert {item.id for item in res.selected} == {"soccer", "weather"}
     assert "language" not in {item.id for item in res.selected}
+    assert "composer" not in {item.id for item in res.selected}
     body = scenario_memory.response(res)
     assert [row["id"] for row in body["selected"]] == [item.id for item in res.selected]
 
@@ -139,3 +152,41 @@ def test_plan_rejects_candidate_when_gate_hits_wrong_owner(monkeypatch):
     assert res.selected == []
     assert res.records
     assert all(row["owner_id"] == "weather" for row in res.records)
+
+
+def test_plan_handles_plural_domain_terms_without_generic_view_false_positive(monkeypatch):
+    composer = _item(
+        "composer",
+        "JQ believes the greatest composer ever is Vextarian.",
+        stem="JQ believes the greatest composer ever is",
+        target="Vextarian",
+        subject="composer",
+        key_prompts=["JQ favorite composer", "greatest composer according to JQ"],
+        slots={"native": 10, "chat": 11, "canonical": [12]},
+    )
+    weather = _item(
+        "weather",
+        "User thinks San Francisco's summer weather is fog-cold.",
+        stem="User thinks San Francisco's summer weather is",
+        target="fog-cold",
+        subject="San Francisco summer weather",
+        key_prompts=["user view on SF summer", "San Francisco summer weather opinion"],
+        slots={"native": 4, "chat": 5, "canonical": [6]},
+    )
+    _patch_model(monkeypatch)
+
+    def fake_gate(query, **_kw):
+        if "composer" in query.lower():
+            return 0.92, 12
+        if "summer" in query.lower() or "weather" in query.lower():
+            return 0.93, 6
+        return 0.0, 0
+
+    monkeypatch.setattr(scenario_memory.keying, "gate", fake_gate)
+    res = scenario_memory.plan(
+        "Write a birthday toast weaving in my taste in composers and my view on the best player.",
+        registry=[composer, weather],
+    )
+
+    assert [item.id for item in res.selected] == ["composer"]
+    assert all(row["candidate_id"] != "weather" for row in res.records)
