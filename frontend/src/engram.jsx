@@ -121,6 +121,53 @@ function Mark({ size = 22 }) {
   );
 }
 
+/* ---- v2.7 "Her"-style thinking animation: a breathing jade orb + expanding ripples ----
+   Replaces the flat "<Mark/> Engram 正在想…" with an organic, alive indicator. Self-contained:
+   the @keyframes ride in via a <style> that mounts only while thinking. Honors reduced-motion. */
+const THINKING_CSS = `
+@keyframes engOrbBreathe {
+  0%,100% { transform: scale(1);    box-shadow: 0 0 10px 1px rgba(14,140,90,0.30); }
+  50%     { transform: scale(1.12); box-shadow: 0 0 22px 6px rgba(14,140,90,0.55); }
+}
+@keyframes engOrbSpin   { to { transform: rotate(360deg); } }
+@keyframes engOrbRipple { 0% { transform: scale(0.55); opacity: 0.5; } 100% { transform: scale(2); opacity: 0; } }
+@keyframes engOrbText   { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { [data-eng-orb] *, [data-eng-orb] { animation: none !important; } }
+`;
+
+function ThinkingOrb() {
+  // breathing 2.4s vs ripple 2.8s are intentionally non-divisible -> no mechanical lockstep.
+  const ring = {
+    position: "absolute", inset: 0, borderRadius: "50%",
+    border: `1.5px solid ${C.jade}`, animation: "engOrbRipple 2.8s ease-out infinite",
+  };
+  return (
+    <div data-eng-orb className="self-start flex items-center gap-3" style={{ paddingLeft: 2 }}>
+      <style>{THINKING_CSS}</style>
+      <div style={{ position: "relative", width: 28, height: 28, flexShrink: 0 }}>
+        <span style={ring} />
+        <span style={{ ...ring, animationDelay: "1.4s" }} />
+        {/* the orb: a lit jade sphere (highlight at 35% 30%) that breathes + glows */}
+        <div style={{
+          position: "absolute", inset: 0, borderRadius: "50%", overflow: "hidden",
+          background: `radial-gradient(circle at 35% 30%, ${C.trace} 0%, ${C.jade} 46%, ${C.jadeInk} 100%)`,
+          animation: "engOrbBreathe 2.4s ease-in-out infinite",
+        }}>
+          {/* slow rotating inner sheen — the "alive" shimmer */}
+          <div style={{
+            position: "absolute", inset: -2, borderRadius: "50%",
+            background: "conic-gradient(from 0deg, transparent 0deg, rgba(214,245,228,0.5) 60deg, transparent 150deg)",
+            animation: "engOrbSpin 5.5s linear infinite",
+          }} />
+        </div>
+      </div>
+      <span style={{ color: C.muted, fontSize: 13, fontFamily: F.sans, animation: "engOrbText 2.4s ease-in-out infinite" }}>
+        Engram 正在想…
+      </span>
+    </div>
+  );
+}
+
 function Switch({ on, onChange, label, disabled }) {
   return (
     <button
@@ -542,11 +589,7 @@ function ChatSurface({ messages, editOn, ragOn, input, setInput, onSend, sending
               </div>
             )
           )}
-          {sending && (
-            <div className="self-start flex items-center gap-1.5" style={{ color: C.muted, fontSize: 13, fontFamily: F.sans }}>
-              <Mark size={13} /> Engram 正在想…
-            </div>
-          )}
+          {sending && <ThinkingOrb />}
           <div ref={endRef} />
         </div>
       </div>
