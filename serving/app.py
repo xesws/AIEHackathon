@@ -34,7 +34,7 @@ import generate
 import keying
 from memory import buffer, extract, rag_store, schema, store
 from memory import consolidate as consolidate_mod
-from serving import ingest, model_host, triggers
+from serving import async_editor, ingest, model_host, triggers
 
 _BOOT_ID = uuid.uuid4().hex
 _STARTED_AT = time.time()
@@ -49,6 +49,7 @@ class ChatRequest(BaseModel):
 class ConsolidateRequest(BaseModel):
     # Optional / empty body: {} or {"trigger": "manual"}.
     trigger: str = "manual"
+    background: bool = False
 
 
 class ConsolidateItemRequest(BaseModel):
@@ -83,18 +84,22 @@ def chat(payload: ChatRequest) -> dict:
     rag_hits = [h for h, _s in rag_scored]
 
     # 3) generate on the resident (possibly edited) model, conditioned on buffer + rag_hits.
-    reply = generate.generate(
-        message,
-        model=model_host.current_model(),
-        buffer=buffer.load_unconsolidated(),
-        rag_hits=rag_hits,
-        use_chat_template=True,
-        tok=model_host.tokenizer(),
-        # generate.py default is 16 (HoReN eval-sized) -> chat replies got cut mid-sentence.
-        # The model stops at the chat EOS on its own; this is just a ceiling big enough to
-        # let a normal reply finish. Bigger = slower (HoReN decodes with use_cache=False).
-        max_new_tokens=160,
-    )
+    #    The inference session makes adapter promotion wait until this answer finishes, so
+    #    a single response never mixes old and new codebooks.
+    with model_host.inference_session():
+        reply = generate.generate(
+            message,
+            model=model_host.current_model(),
+            buffer=buffer.load_unconsolidated(),
+            rag_hits=rag_hits,
+            use_chat_template=True,
+            tok=model_host.tokenizer(),
+            # generate.py default is 16 (HoReN eval-sized) -> chat replies got cut mid-sentence.
+            # The model stops at the chat EOS on its own; this is just a ceiling big enough to
+            # let a normal reply finish. Bigger = slower (HoReN decodes with use_cache=False).
+            max_new_tokens=160,
+        )
+        att = attribution(message)
 
     return {
         "reply": reply,
@@ -107,7 +112,7 @@ def chat(payload: ChatRequest) -> dict:
         "rag_indexed": result["n_rag_indexed"],
         # per-answer codebook attribution (honest: ONE retrieval decision per answer);
         # None when editOn off / no edit installed / computation fails (best-effort).
-        "attribution": attribution(message),
+        "attribution": att,
     }
 
 
@@ -147,11 +152,40 @@ def rag_search(q: str, k: int = 5) -> dict:
 
 def consolidate(payload: ConsolidateRequest | None = None) -> dict:
     """POST /consolidate — trigger one consolidation pass; return n_written + buffer_count."""
+    payload = payload or ConsolidateRequest()
+    if payload.background:
+        job = async_editor.submit(trigger=payload.trigger)
+        return {
+            "queued": True,
+            "job": job,
+            "buffer_count": len(buffer.load_unconsolidated()),
+        }
     n_written = triggers.manual()
     return {
         "n_written": n_written,
         "buffer_count": len(buffer.load_unconsolidated()),
     }
+
+
+def consolidate_async(payload: ConsolidateRequest | None = None) -> dict:
+    """POST /consolidate/async — queue one shadow-edit consolidation pass."""
+    payload = payload or ConsolidateRequest()
+    job = async_editor.submit(trigger=payload.trigger)
+    return {
+        "queued": True,
+        "job": job,
+        "buffer_count": len(buffer.load_unconsolidated()),
+    }
+
+
+def consolidation_status(job_id: str | None = None) -> dict:
+    """GET async consolidation worker/job state."""
+    if job_id is None:
+        return async_editor.status()
+    job = async_editor.get(job_id)
+    if job is None:
+        raise HTTPException(404, "consolidation job not found")
+    return {"job": job}
 
 
 def memories() -> dict:
@@ -213,13 +247,14 @@ def patch_memory(item_id: str, payload: PatchRequest) -> dict:
 
 def edit_module(payload: EditModuleRequest) -> dict:
     """POST /edit-module — enable/disable the recorded edit adapter on the resident model."""
-    if payload.on:
-        adapter = model_host.recorded_adapter()
-        if adapter is None:
-            raise HTTPException(409, "no edit module to enable")
-        model_host.swap_edit_module(adapter)
-    else:
-        model_host.swap_edit_module(None)
+    with model_host.inference_session():
+        if payload.on:
+            adapter = model_host.recorded_adapter()
+            if adapter is None:
+                raise HTTPException(409, "no edit module to enable")
+            model_host.swap_edit_module(adapter)
+        else:
+            model_host.swap_edit_module(None)
     return {"on": payload.on}
 
 
@@ -248,6 +283,7 @@ def health() -> dict:
         "boot_id": _BOOT_ID,
         "started_at": _STARTED_AT,
         "counts": c,
+        "async_editor": async_editor.status(),
     }
 
 
@@ -257,7 +293,11 @@ async def lifespan(app: FastAPI):
     """Load base weights (~90s, ~16GB) then wire the model provider for consolidation."""
     model_host.load_base()
     consolidate_mod.set_model_provider(lambda: model_host.current_model())
-    yield
+    async_editor.start()
+    try:
+        yield
+    finally:
+        async_editor.stop()
 
 
 def create_app() -> FastAPI:
@@ -294,6 +334,18 @@ def create_app() -> FastAPI:
     @app.post("/consolidate")
     def _consolidate(payload: ConsolidateRequest | None = None) -> dict:
         return consolidate(payload)
+
+    @app.post("/consolidate/async")
+    def _consolidate_async(payload: ConsolidateRequest | None = None) -> dict:
+        return consolidate_async(payload)
+
+    @app.get("/consolidate/jobs")
+    def _consolidation_jobs() -> dict:
+        return consolidation_status()
+
+    @app.get("/consolidate/jobs/{job_id}")
+    def _consolidation_job(job_id: str) -> dict:
+        return consolidation_status(job_id)
 
     @app.get("/memories")
     def _memories() -> dict:

@@ -44,7 +44,7 @@ def env(monkeypatch):
     from fastapi.testclient import TestClient
 
     # The exact module objects app.py calls into (module-attribute import style).
-    from serving import model_host, ingest, triggers
+    from serving import async_editor, model_host, ingest, triggers
     from memory import buffer, rag_store, store, schema, consolidate
     import generate
 
@@ -54,6 +54,10 @@ def env(monkeypatch):
         ingest_chats=[],         # chat arg each ingest call received
         generate_calls=[],       # {"query","kwargs"} per generate call
         manual_calls=0,
+        async_submit_calls=[],
+        async_get_calls=[],
+        async_start_calls=0,
+        async_stop_calls=0,
         search_calls=[],         # {"query","k"} per rag_store.search call
         by_status_calls=[],      # status strings store.by_status was queried with
         order=[],                # interleave log: "ingest" / "generate" (write-then-read)
@@ -122,6 +126,25 @@ def env(monkeypatch):
         rec.manual_calls += 1
         return 2
 
+    def fake_async_start():
+        rec.async_start_calls += 1
+
+    def fake_async_stop():
+        rec.async_stop_calls += 1
+
+    def fake_async_submit(**kwargs):
+        rec.async_submit_calls.append(kwargs)
+        return {"id": "job1", "status": "queued", **kwargs}
+
+    def fake_async_status():
+        return {"worker_alive": True, "queue_depth": 0, "running": None, "counts": {}}
+
+    def fake_async_get(job_id):
+        rec.async_get_calls.append(job_id)
+        if job_id == "missing":
+            return None
+        return {"id": job_id, "status": "succeeded", "n_written": 2}
+
     def fake_search(query, k=5, with_scores=False):
         # v2.4: /chat now calls with with_scores=True (additive). Mirror the real return shape:
         # list[(item, cosine)] when scored, else the plain item list.
@@ -151,6 +174,11 @@ def env(monkeypatch):
     monkeypatch.setattr(ingest, "ingest", fake_ingest)
     monkeypatch.setattr(generate, "generate", fake_generate)
     monkeypatch.setattr(triggers, "manual", fake_manual)
+    monkeypatch.setattr(async_editor, "start", fake_async_start)
+    monkeypatch.setattr(async_editor, "stop", fake_async_stop)
+    monkeypatch.setattr(async_editor, "submit", fake_async_submit)
+    monkeypatch.setattr(async_editor, "get", fake_async_get)
+    monkeypatch.setattr(async_editor, "status", fake_async_status)
     monkeypatch.setattr(rag_store, "search", fake_search)
     monkeypatch.setattr(buffer, "load_unconsolidated", fake_load_unconsolidated)
     monkeypatch.setattr(store, "by_status", fake_by_status)
@@ -256,6 +284,43 @@ def test_consolidate_calls_manual(env):
     body = resp.json()
     assert isinstance(body["n_written"], int) and body["n_written"] == 2
     assert isinstance(body["buffer_count"], int) and body["buffer_count"] == 1
+
+
+def test_consolidate_background_queues_async_job(env):
+    """/consolidate with background=true queues a shadow-edit job and returns immediately."""
+    rec = env.rec
+    resp = env.client.post("/consolidate", json={"background": True})
+    assert resp.status_code == 200
+
+    assert rec.manual_calls == 0
+    assert rec.async_submit_calls == [{"trigger": "manual"}]
+    body = resp.json()
+    assert body["queued"] is True
+    assert body["job"]["id"] == "job1"
+    assert body["buffer_count"] == 1
+
+
+def test_consolidate_async_route_queues_async_job(env):
+    """/consolidate/async is the explicit background consolidation endpoint."""
+    rec = env.rec
+    resp = env.client.post("/consolidate/async", json={})
+    assert resp.status_code == 200
+
+    assert rec.manual_calls == 0
+    assert rec.async_submit_calls == [{"trigger": "manual"}]
+    assert resp.json()["queued"] is True
+
+
+def test_consolidate_job_status_route(env):
+    """/consolidate/jobs/{id} returns the recorded async job or a 404 envelope."""
+    ok = env.client.get("/consolidate/jobs/job1")
+    assert ok.status_code == 200
+    assert ok.json()["job"]["status"] == "succeeded"
+    assert env.rec.async_get_calls == ["job1"]
+
+    missing = env.client.get("/consolidate/jobs/missing")
+    assert missing.status_code == 404
+    assert missing.json()["error"] == "consolidation job not found"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -253,7 +253,7 @@ def _process_item(it: MemoryItem, registry: list[MemoryItem], model: Any, editin
     return 1  # counts the successful edit once (NEW or SUPERSEDE)
 
 
-def run_pass(trigger: str, ids=None) -> int:
+def run_pass(trigger: str, ids=None, editing_module: Any = None) -> int:
     """Run one consolidation pass (invoked by ``serving/triggers.py``).
 
     For each unconsolidated buffer item: classify vs. consolidated edit-route memory via
@@ -269,15 +269,16 @@ def run_pass(trigger: str, ids=None) -> int:
     if model is None:
         raise RuntimeError("consolidate: no model provider set (call set_model_provider)")
 
-    # Lazy import keeps ``serving`` out of memory/'s static import graph (INV-11).
-    import editing
+    if editing_module is None:
+        # Lazy import keeps ``serving`` out of memory/'s static import graph (INV-11).
+        import editing as editing_module
 
     items = buffer.load_unconsolidated()
     if ids is not None:
         idset = set(ids)
         items = [it for it in items if it.id in idset]
     registry = [m for m in store.by_status("consolidated") if m.route == "edit"]
-    n_written = sum(_process_item(it, registry, model, editing) for it in items)
+    n_written = sum(_process_item(it, registry, model, editing_module) for it in items)
     return n_written
 
 
